@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: ecommerce-agent-java-service
+  flyway:
+    enabled: false
+
+springdoc:
+  swagger-ui:
+    path: /docs
