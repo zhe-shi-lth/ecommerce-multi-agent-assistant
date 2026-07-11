@@ -125,13 +125,26 @@ Python 服务通过环境变量控制 LLM（可用 `python-agent-service/.env` �
 - LLM 调用失败（如 Ollama 未启动）时，Supervisor 会自动降级到规则实现并继续，不会中断主链路；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
 - 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
 
+### 6. 前端（Node）
+
+前端是独立 React + Vite SPA（`frontend/` 目录），需 Node.js 18+（本机实测 v24）。开发期由 Vite 把 `/api` 代理到 Java，无需改 Java CORS。
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:5173
+```
+
 ---
 
-## 启动三个服务
+## 启动四个服务
 
 1. **PostgreSQL**：`docker compose up -d postgres`
 2. **Java**：在 `java-service` 目录运行 `./mvnw spring-boot:run`（或 `mvn spring-boot:run`）
 3. **Python**：`uv run fastapi dev app/main.py`（`python-agent-service` 目录）
+4. **前端**：`cd frontend && npm install && npm run dev`（`http://localhost:5173`）
+
+前端通过 Vite 代理访问 Java（`:8080`），因此启动顺序：先起 PostgreSQL/Java/Python，再起前端。
 
 健康检查：
 - Java：`GET http://localhost:8080/health`
@@ -204,6 +217,8 @@ python scripts/demo_e2e.py
 ```
 
 脚本会：创建 1 个商品 + 1 条库存 + 1 个订单 → 调 `POST /api/orchestration/generate` → 校验 `operation_plans` 写入 1 行、`agent_runs` 写入 5 行（5 个 Agent 各一条，均 `status=SUCCESS`）。
+
+造数后，打开前端 `http://localhost:5173` → 「运营计划」查看计划与每个 Agent 的 trace（输入/输出/错误），即可人工阅读审核。
 
 也可手动复现（见下方示例请求）。
 
