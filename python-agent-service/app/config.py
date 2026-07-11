@@ -1,5 +1,6 @@
 """LLM 与运行相关配置，从环境变量读取（可用 .env 提供）。"""
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -37,3 +38,20 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:latest")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "ollama")
 LLM_TEMPERATURE = _as_float(os.getenv("LLM_TEMPERATURE"), 0.3)
 LLM_TIMEOUT_MS = _as_int(os.getenv("LLM_TIMEOUT_MS"), 30000)
+
+# RAG：本地向量知识库（可选；关闭或失败则链路退化为无知识库）
+RAG_ENABLED = _as_bool(os.getenv("RAG_ENABLED"), default=True)
+RAG_KNOWLEDGE_DIR = os.getenv("RAG_KNOWLEDGE_DIR", "knowledge")
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "nomic-embed-text")
+RAG_EMBEDDING_BASE_URL = os.getenv("RAG_EMBEDDING_BASE_URL", LLM_BASE_URL)
+RAG_TOP_K = _as_int(os.getenv("RAG_TOP_K"), 3)
+RAG_CHUNK_SIZE = _as_int(os.getenv("RAG_CHUNK_SIZE"), 500)
+RAG_CHUNK_OVERLAP = _as_int(os.getenv("RAG_CHUNK_OVERLAP"), 50)
+
+# 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
+BASE_DIR = Path(__file__).resolve().parents[1]
+RAG_KNOWLEDGE_PATH = (
+    BASE_DIR / RAG_KNOWLEDGE_DIR
+    if not Path(RAG_KNOWLEDGE_DIR).is_absolute()
+    else Path(RAG_KNOWLEDGE_DIR)
+)

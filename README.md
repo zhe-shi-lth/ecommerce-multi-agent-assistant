@@ -122,6 +122,53 @@ Python 服务通过环境变量控制 LLM（可用 `python-agent-service/.env` �
 | `LLM_TIMEOUT_MS` | `30000` | 单次调用超时（毫秒）。 |
 
 - 结构化输出直接复用 Agent 的 Pydantic Schema，Java 落库契约不变。
+
+### 6. 分类知识库 RAG（可选，横向赋能）
+
+商品规划（Product Planning）与图片创意（Image Creative）两个 Agent 会检索「分类知识库」并把命中内容注入 prompt，使产出引用平台规则、违禁词与 SEO 建议。知识库为本地向量检索（Ollama 嵌入 + 内存 Chroma），**不改 Java/Postgres，Python 仍不持库、可独立运行**。
+
+知识以 Markdown 沉淀，一个类目一个文件：
+
+```
+python-agent-service/knowledge/
+├── Home.md        # 类目名取文件名
+├── Beauty.md
+└── Apparel.md
+```
+
+每个文件按 `#`/`##` 组织「平台规则 / 违禁词 / SEO 建议」即可，例如：
+
+```markdown
+# Home 运营知识库
+## 平台规则
+### 淘宝
+- 标题核心词前置
+## 违禁词
+- 绝对化用语：最、第一、国家级
+## SEO 建议
+- 核心词：保温杯、便携水杯
+```
+
+启用步骤（需本地 Ollama）：
+
+```bash
+ollama pull nomic-embed-text   # 本地 embedding 模型
+```
+
+Python 服务通过环境变量控制（默认值即开启，关闭后行为与改造前完全一致）：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `RAG_ENABLED` | `true` | 关闭后不检索知识库，Agent 行为与改造前一致。 |
+| `RAG_KNOWLEDGE_DIR` | `knowledge` | 知识库目录（相对 `python-agent-service/`，或绝对路径）。 |
+| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | 本地 embedding 模型名。 |
+| `RAG_EMBEDDING_BASE_URL` | `http://localhost:11434/v1` | embeddings 端点，默认复用 LLM 的 Ollama `/v1`。 |
+| `RAG_TOP_K` | `3` | 每个类目召回的块数。 |
+| `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `500` / `50` | 切块参数（可选）。 |
+
+- 检索结果会写入 `PRODUCT_PLANNING_AGENT` 的运行轨迹 `input_json.retrieved_knowledge`，前端「运行详情」可直接查看注入了哪些知识。
+- 优雅降级：RAG 关闭 / 嵌入模型不可用 / 检索异常时返回空知识串，主链路不中断。
+
 - LLM 调用失败（如 Ollama 未启动）时，Supervisor 会自动降级到规则实现并继续，不会中断主链路；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
 - 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
 
@@ -272,6 +319,11 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 | `LLM_API_KEY` | `ollama` | LLM API Key |
 | `LLM_TEMPERATURE` | `0.3` | 生成温度 |
 | `LLM_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时（毫秒） |
+| `RAG_ENABLED` | `true` | 是否启用分类知识库 RAG（见上方「分类知识库 RAG」） |
+| `RAG_KNOWLEDGE_DIR` | `knowledge` | 知识库目录 |
+| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | 本地 embedding 模型 |
+| `RAG_EMBEDDING_BASE_URL` | `http://localhost:11434/v1` | embeddings 端点（默认复用 LLM） |
+| `RAG_TOP_K` | `3` | 每类目召回块数 |
 
 ---
 
@@ -279,4 +331,4 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 
 - 各表 `status` 字段有 CHECK 枚举约束，写数据时需使用合法枚举值（见上文示例）。
 - 默认 Agent 为规则实现；设置 `LLM_ENABLED=true` 且本地 Ollama 就绪后，5 个 Agent 走真实 LLM 生成，失败自动降级到规则。
-- **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、分类知识库 RAG、LangGraph 动态编排。
+- **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、LangGraph 动态编排。

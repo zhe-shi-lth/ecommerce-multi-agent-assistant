@@ -10,6 +10,7 @@ from app.schemas.inventory import InventoryContext
 from app.schemas.operation_plan import AgentRunRecord, OperationPlanResult
 from app.schemas.order import OrderContext
 from app.schemas.product import ProductContext
+from app.rag.service import get_knowledge_service
 
 
 class SupervisorAgent:
@@ -32,20 +33,27 @@ class SupervisorAgent:
 
         supervisor_start = perf_counter()
 
+        # 检索一次分类知识库，下传给商品规划与图片创意两个 Agent
+        knowledge = get_knowledge_service().retrieve_for_product(product)
+
         product_plan, product_run = self._safe_run(
             "PRODUCT_PLANNING_AGENT",
-            lambda: self.product_agent.run(product),
-            lambda: self.product_agent._rule_based_run(product),
-            product.model_dump(),
+            lambda: self.product_agent.run(product, knowledge),
+            lambda: self.product_agent._rule_based_run(product, knowledge),
+            {"product": product.model_dump(), "retrieved_knowledge": knowledge},
             errors,
         )
         agent_runs.append(product_run)
 
         image_plan, image_run = self._safe_run(
             "IMAGE_CREATIVE_AGENT",
-            lambda: self.image_agent.run(product, product_plan),
-            lambda: self.image_agent._rule_based_run(product, product_plan),
-            {"product": product.model_dump(), "product_plan": product_plan.model_dump()},
+            lambda: self.image_agent.run(product, product_plan, knowledge),
+            lambda: self.image_agent._rule_based_run(product, product_plan, knowledge),
+            {
+                "product": product.model_dump(),
+                "product_plan": product_plan.model_dump(),
+                "retrieved_knowledge": knowledge,
+            },
             errors,
         )
         agent_runs.append(image_run)

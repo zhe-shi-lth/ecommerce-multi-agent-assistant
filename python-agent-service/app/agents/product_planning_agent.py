@@ -13,20 +13,28 @@ _SYSTEM_PROMPT = (
     "使用简体中文，内容具体、可执行，不要编造与上下文无关的信息。"
 )
 
+# 知识库内容注入模板：不偏离商品事实，优先采纳平台规则、违禁词规避与 SEO 建议
+_KNOWLEDGE_APPEND = (
+    "\n\n【分类知识库参考】\n{}\n"
+    "请在不偏离商品事实的前提下，优先采纳其中的平台规则、违禁词规避与 SEO 建议。"
+)
+
 
 class ProductPlanningAgent:
-    def run(self, product: ProductContext) -> ProductPlan:
+    def run(self, product: ProductContext, knowledge: str = "") -> ProductPlan:
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(product)
+            return self._rule_based_run(product, knowledge)
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
             "请按 ProductPlan 的结构化字段输出，包含 seo_keywords、meta_description、platform_copies。"
         )
+        if knowledge:
+            user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
         return client.generate(_SYSTEM_PROMPT, user_prompt, ProductPlan)
 
-    def _rule_based_run(self, product: ProductContext) -> ProductPlan:
+    def _rule_based_run(self, product: ProductContext, knowledge: str = "") -> ProductPlan:
         audience = product.target_audience or "目标用户"
         scenario = product.usage_scenario or "日常使用场景"
         selling_points = [
@@ -49,6 +57,12 @@ class ProductPlanningAgent:
             "douyin": f"短视频种草｜{product.name}：{scenario}里的小确幸，{selling_points[1]}。",
             "xiaohongshu": f"笔记分享｜入手{product.name}后，{scenario}幸福感拉满，{selling_points[2]}。",
         }
+
+        # 规则路径也采纳知识库：补充 SEO 词 + 提示规避违禁词
+        if knowledge:
+            seo_keywords = seo_keywords + ["知识库建议词（见知识库SEO）"]
+            for key in platform_copies:
+                platform_copies[key] += "（请对照知识库平台规则与违禁词自检）"
 
         return ProductPlan(
             recommended_title=f"{product.name} {scenario}适用{product.category}好物",
