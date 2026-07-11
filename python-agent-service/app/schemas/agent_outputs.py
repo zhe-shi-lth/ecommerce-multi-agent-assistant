@@ -37,6 +37,14 @@ class InventoryPlan(BaseModel):
     suggested_restock_quantity: int = Field(ge=0)
     restock_priority: str
     reason: str = Field(min_length=1)
+    # 预测衍生字段（步骤 4：基于销量历史的确定性需求预测）。可选、带默认值，
+    # 向前兼容旧落库；Java inventory_plan_json 为通用 Map，前端 JsonView 自动渲染。
+    daily_demand: float = 0.0
+    available_stock: int = 0
+    projected_stock: int = 0
+    purchase_cycle_days: int = 0
+    days_to_stockout: int | None = None
+    required_coverage: float = 0.0
 
 
 class FulfillmentPlan(BaseModel):
