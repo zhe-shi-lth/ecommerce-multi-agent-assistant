@@ -7,6 +7,9 @@ class ProductPlan(BaseModel):
     detail_description: str = Field(min_length=1)
     target_user_summary: str = Field(min_length=1)
     listing_suggestion: str = Field(min_length=1)
+    seo_keywords: list[str] = Field(min_length=1)
+    meta_description: str = Field(min_length=1)
+    platform_copies: dict[str, str] = Field(min_length=1)
 
 
 class ImagePlan(BaseModel):

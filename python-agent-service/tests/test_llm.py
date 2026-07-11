@@ -23,6 +23,9 @@ def _stub_factory(system: str, user: str, schema: type):
             detail_description="d",
             target_user_summary="t",
             listing_suggestion="l",
+            seo_keywords=["k1"],
+            meta_description="m",
+            platform_copies={"taobao": "t", "douyin": "d", "xiaohongshu": "x"},
         )
     if schema is ImagePlan:
         return ImagePlan(

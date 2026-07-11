@@ -59,6 +59,13 @@ def test_operation_plan_result_serializes_nested_agent_outputs():
             detail_description="适合日常果蔬饮品制作。",
             target_user_summary="适合关注健康饮食的用户。",
             listing_suggestion="突出便携、易清洗和多场景使用。",
+            seo_keywords=["便携榨汁杯", "办公室果汁机", "健身饮品"],
+            meta_description="便携式榨汁杯，办公室健身房随时制作健康果蔬饮品。",
+            platform_copies={
+                "taobao": "便携榨汁杯办公室好物",
+                "douyin": "短视频种草便携榨汁",
+                "xiaohongshu": "笔记分享便携榨汁杯",
+            },
         ),
         image_plan=ImagePlan(
             main_image_prompt="白色背景，突出杯身和便携性。",

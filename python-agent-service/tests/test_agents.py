@@ -54,6 +54,9 @@ def test_product_planning_agent_generates_listing_plan():
     assert len(plan.selling_points) == 3
     assert plan.detail_description
     assert plan.listing_suggestion
+    assert plan.seo_keywords
+    assert plan.meta_description
+    assert set(plan.platform_copies.keys()) == {"taobao", "douyin", "xiaohongshu"}
 
 
 def test_image_creative_agent_uses_product_selling_points():
