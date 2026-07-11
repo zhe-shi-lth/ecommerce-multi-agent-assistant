@@ -1,6 +1,7 @@
 """分类知识库 RAG 单测：无需 Ollama，用本地确定性 fake embedding。"""
 import hashlib
 
+import chromadb
 import pytest
 from langchain_core.embeddings import Embeddings
 
@@ -62,7 +63,8 @@ def test_loader_chunks_and_metadata(tmp_path):
         assert d.metadata["source_file"] in {"Home.md", "Beauty.md"}
 
 
-def test_retrieve_routes_by_category(tmp_path):
+def test_retrieve_routes_by_category(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.rag.service.config.RAG_ENABLED", True)  # 测试封闭，不受本地 .env 关闭 RAG 影响
     _write_kb(tmp_path)
     docs = KnowledgeLoader(tmp_path).load()
     service = CategoryKnowledgeService(embeddings=DeterministicFakeEmbeddings())
@@ -72,6 +74,7 @@ def test_retrieve_routes_by_category(tmp_path):
         documents=docs,
         embedding=DeterministicFakeEmbeddings(),
         collection_name="test_kb",
+        client=chromadb.EphemeralClient(),  # 隔离，避免默认持久化 client 的残留缓存串味
     )
     service._built = True
 
@@ -90,7 +93,8 @@ def test_retrieve_disabled(monkeypatch, tmp_path):
     assert service.retrieve("Home", "anything") == ""
 
 
-def test_retrieve_for_product_uses_category(tmp_path):
+def test_retrieve_for_product_uses_category(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.rag.service.config.RAG_ENABLED", True)  # 测试封闭，不受本地 .env 关闭 RAG 影响
     _write_kb(tmp_path)
     docs = KnowledgeLoader(tmp_path).load()
     service = CategoryKnowledgeService(embeddings=DeterministicFakeEmbeddings())
@@ -100,6 +104,7 @@ def test_retrieve_for_product_uses_category(tmp_path):
         documents=docs,
         embedding=DeterministicFakeEmbeddings(),
         collection_name="test_kb2",
+        client=chromadb.EphemeralClient(),  # 隔离，避免默认持久化 client 的残留缓存串味
     )
     service._built = True
 
