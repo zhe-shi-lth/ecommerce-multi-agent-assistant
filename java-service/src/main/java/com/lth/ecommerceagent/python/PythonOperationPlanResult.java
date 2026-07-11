@@ -33,7 +33,16 @@ public record PythonOperationPlanResult(
             @JsonProperty("scene_image_prompt") String sceneImagePrompt,
             @JsonProperty("marketing_image_prompt") String marketingImagePrompt,
             @JsonProperty("image_style") String imageStyle,
-            @JsonProperty("image_risk_notes") List<String> imageRiskNotes) {
+            @JsonProperty("image_risk_notes") List<String> imageRiskNotes,
+            @JsonProperty("image_review_result") ImageReviewResult imageReviewResult) {
+    }
+
+    public record ImageReviewResult(
+            @JsonProperty("overall_score") Integer overallScore,
+            @JsonProperty("risk_level") String riskLevel,
+            @JsonProperty("issues") List<String> issues,
+            @JsonProperty("suggestions") List<String> suggestions,
+            @JsonProperty("reviewer") String reviewer) {
     }
 
     public record InventoryPlan(
