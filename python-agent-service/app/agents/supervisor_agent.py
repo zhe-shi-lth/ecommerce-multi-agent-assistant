@@ -31,27 +31,40 @@ class SupervisorAgent:
         errors: list[dict] = []
 
         supervisor_start = perf_counter()
-        product_plan, product_run = self._time_agent(
+
+        product_plan, product_run = self._safe_run(
             "PRODUCT_PLANNING_AGENT",
             lambda: self.product_agent.run(product),
+            lambda: self.product_agent._rule_based_run(product),
+            product.model_dump(),
+            errors,
         )
         agent_runs.append(product_run)
 
-        image_plan, image_run = self._time_agent(
+        image_plan, image_run = self._safe_run(
             "IMAGE_CREATIVE_AGENT",
             lambda: self.image_agent.run(product, product_plan),
+            lambda: self.image_agent._rule_based_run(product, product_plan),
+            {"product": product.model_dump(), "product_plan": product_plan.model_dump()},
+            errors,
         )
         agent_runs.append(image_run)
 
-        inventory_plan, inventory_run = self._time_agent(
+        inventory_plan, inventory_run = self._safe_run(
             "INVENTORY_PURCHASE_AGENT",
             lambda: self.inventory_agent.run(inventory, order),
+            lambda: self.inventory_agent._rule_based_run(inventory, order),
+            {"inventory": inventory.model_dump(), "order": order.model_dump()},
+            errors,
         )
         agent_runs.append(inventory_run)
 
-        fulfillment_plan, fulfillment_run = self._time_agent(
+        fulfillment_plan, fulfillment_run = self._safe_run(
             "ORDER_FULFILLMENT_AGENT",
             lambda: self.fulfillment_agent.run(order, inventory),
+            lambda: self.fulfillment_agent._rule_based_run(order, inventory),
+            {"order": order.model_dump(), "inventory": inventory.model_dump()},
+            errors,
         )
         agent_runs.append(fulfillment_run)
 
@@ -86,15 +99,28 @@ class SupervisorAgent:
             agent_runs=agent_runs,
         )
 
-    def _time_agent(self, agent_name: str, run_agent):
+    def _safe_run(self, agent_name: str, run_fn, rule_fn, input_json: dict, errors: list[dict]):
+        """运行 Agent：成功记 SUCCESS；LLM/异常失败记 FAILED 并降级到规则实现，链路继续。"""
         start = perf_counter()
-        output = run_agent()
+        try:
+            output = run_fn()
+            status = "SUCCESS"
+            error_message = None
+        except Exception as exc:  # noqa: BLE001
+            error_message = f"{type(exc).__name__}: {exc}"
+            output = rule_fn()
+            status = "FAILED"
+            errors.append({"agent": agent_name, "error": error_message})
         duration_ms = int((perf_counter() - start) * 1000)
-        return output, AgentRunRecord(
+        record = AgentRunRecord(
             agent_name=agent_name,
-            status="SUCCESS",
+            status=status,
             duration_ms=duration_ms,
+            input_json=input_json,
+            output_json=output.model_dump() if output is not None else None,
+            error_message=error_message,
         )
+        return output, record
 
     def _summarize(
         self,

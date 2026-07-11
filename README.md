@@ -100,6 +100,31 @@ uv sync
 uv run fastapi dev app/main.py   # 端口 8000，无需数据库
 ```
 
+### 5. LLM 配置（可选，默认本地 Ollama）
+
+5 个 Agent 默认走「规则实现」。要接入真实 LLM，需本地运行 Ollama（OpenAI 兼容协议）：
+
+```bash
+# 安装并拉取一个支持工具调用的模型（中文场景推荐 qwen2.5）
+ollama pull qwen2.5:latest
+ollama list   # 确认模型已就绪
+```
+
+Python 服务通过环境变量控制 LLM（可用 `python-agent-service/.env` 提供，已加载）：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LLM_ENABLED` | `true` | 是否启用真实 LLM；设为 `false` 则全部退回规则实现（无需 Ollama）。 |
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点，指向 Ollama 的 `/v1`。 |
+| `LLM_MODEL` | `qwen2.5:latest` | 模型名，需与 `ollama pull` 的模型一致。 |
+| `LLM_API_KEY` | `ollama` | Ollama 无需真实 key，填任意值即可。 |
+| `LLM_TEMPERATURE` | `0.3` | 生成温度。 |
+| `LLM_TIMEOUT_MS` | `30000` | 单次调用超时（毫秒）。 |
+
+- 结构化输出直接复用 Agent 的 Pydantic Schema，Java 落库契约不变。
+- LLM 调用失败（如 Ollama 未启动）时，Supervisor 会自动降级到规则实现并继续，不会中断主链路；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
+- 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
+
 ---
 
 ## 启动三个服务
@@ -226,11 +251,17 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 | `python.agent.connect-timeout-ms` | `3000` | 连接超时 |
 | `python.agent.read-timeout-ms` | `30000` | 读取超时 |
 | `JAVA_API_BASE_URL` | `http://localhost:8080` | Python 调 Java 地址（环境变量覆盖） |
+| `LLM_ENABLED` | `true` | 是否启用真实 LLM（见上方「LLM 配置」） |
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点（Ollama） |
+| `LLM_MODEL` | `qwen2.5:latest` | LLM 模型名 |
+| `LLM_API_KEY` | `ollama` | LLM API Key |
+| `LLM_TEMPERATURE` | `0.3` | 生成温度 |
+| `LLM_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时（毫秒） |
 
 ---
 
 ## 已知约束与下一步
 
 - 各表 `status` 字段有 CHECK 枚举约束，写数据时需使用合法枚举值（见上文示例）。
-- Agent 为规则式占位实现，尚未接入真实 LLM / 外部服务。
-- **下一步（Task 13 之后）**：接入真实 LLM、真实电商 / 支付 / 物流 / 图片生成、可观测性与更丰富的运营策略。
+- 默认 Agent 为规则实现；设置 `LLM_ENABLED=true` 且本地 Ollama 就绪后，5 个 Agent 走真实 LLM 生成，失败自动降级到规则。
+- **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、分类知识库 RAG、LangGraph 动态编排。
