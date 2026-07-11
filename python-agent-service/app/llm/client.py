@@ -60,8 +60,25 @@ _client: LLMClient | None = None
 _initialized = False
 
 
+def _endpoint_reachable() -> bool:
+    """快速探活 LLM 端点（短超时）。
+
+    任何 HTTP 响应（含 401/403/404）都视为「主机可达」；仅连接/超时类错误
+    视为「不可用」。这样 Ollama 未启动时可立刻降级到规则实现，而不是每个
+    Agent 都傻等 LLM_TIMEOUT_MS 才失败（避免整条生成链路被拖垮）。
+    """
+    import httpx
+
+    try:
+        url = config.LLM_BASE_URL.rstrip("/") + "/models"
+        httpx.get(url, timeout=3.0, follow_redirects=True)
+        return True
+    except httpx.RequestError:
+        return False
+
+
 def get_llm_client() -> LLMClient | None:
-    """返回全局 LLM 客户端；LLM 禁用或初始化失败返回 None。"""
+    """返回全局 LLM 客户端；LLM 禁用、构造失败或端点不可达时返回 None（走规则 fallback）。"""
     global _client, _initialized
     if _initialized:
         return _client
@@ -73,5 +90,9 @@ def get_llm_client() -> LLMClient | None:
         _client = OpenAILikeClient()
     except Exception:
         # 构造失败（如依赖缺失）不阻断服务，Agent 走规则 fallback。
+        _client = None
+        return _client
+    # 端点不可达则直接降级，避免每次生成傻等 LLM_TIMEOUT_MS。
+    if not _endpoint_reachable():
         _client = None
     return _client

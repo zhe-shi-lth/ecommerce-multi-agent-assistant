@@ -69,19 +69,19 @@ java -version   # 确认 21.x
 ```
 
 ### 2. Maven
-推荐使用项目自带的 Maven Wrapper（`./mvnw`），无需单独安装 Maven：
+已安装 Maven 时直接运行（本文档采用此方式，PowerShell 下直接可用）：
 
 ```bash
 cd java-service
-./mvnw -B clean compile
-./mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
-已安装 Maven 也可直接用 `mvn`。**Windows + Git Bash 注意**：直接敲 `mvn` 可能调用 Unix 启动脚本并报告 `ClassNotFoundException: org.codehaus.plexus.classworlds.launcher.Launcher`；此时改用 Windows 版启动器 `mvn.cmd`（或 `mvnw.cmd`）：
+未单独安装 Maven 也可用项目自带的 Maven Wrapper：
+- Linux / macOS / Git Bash：`./mvnw spring-boot:run`
+- Windows PowerShell：`.\mvnw.cmd spring-boot:run`（PowerShell 不会从当前目录直接运行命令，需 `.\` 前缀）
 
-```bash
-mvnw.cmd spring-boot:run
-```
+> **Windows + Git Bash 注意**：在 Git Bash 中直接敲 `mvn` 可能调用 Unix 启动脚本并报告
+> `ClassNotFoundException: org.codehaus.plexus.classworlds.launcher.Launcher`；此时改用 `./mvnw` 或 `mvn.cmd`。
 
 ### 3. Docker / PostgreSQL
 需要 Docker 且能拉取 `postgres:16` 镜像（如所在网络需配置镜像源，请自行设置 Docker `registry-mirrors`）：
@@ -169,6 +169,31 @@ Python 服务通过环境变量控制（默认值即开启，关闭后行为与�
 - 检索结果会写入 `PRODUCT_PLANNING_AGENT` 的运行轨迹 `input_json.retrieved_knowledge`，前端「运行详情」可直接查看注入了哪些知识。
 - 优雅降级：RAG 关闭 / 嵌入模型不可用 / 检索异常时返回空知识串，主链路不中断。
 
+### 7. 图片视觉审核（可选，全本地）
+
+Image Creative Agent 在生成图片创意方案后，会用**本地 LLM** 对方案做一次独立「视觉合规/质量审核」，产出结构化结果：
+
+```json
+{
+  "overall_score": 92,
+  "risk_level": "低风险",
+  "issues": [],
+  "suggestions": ["可直接使用"],
+  "reviewer": "llm"
+}
+```
+
+- 审核复用本地 Ollama（与生成同一 `LLM_*` 配置），**不接外部图片生成 API、不引 key、无费用**。
+- 审核结果随 `ImagePlan.image_review_result` 一并返回，并写入 `IMAGE_CREATIVE_AGENT` 的运行轨迹 `output_json`，前端「运行详情」图片创意块与 trace 自动可见。
+- 关闭 `IMAGE_REVIEW_ENABLED=false` 后不再产出审核字段，行为与改造前一致。
+- 优雅降级：审核 LLM 调用失败时不丢弃已生成的创意方案，审核结果置为 `null`；LLM 关闭（规则路径）时走确定性启发式审核（`reviewer="rule"`）。
+
+Python 服务通过环境变量控制：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `IMAGE_REVIEW_ENABLED` | `true` | 关闭后不产出图片审核结果。 |
+
 - LLM 调用失败（如 Ollama 未启动）时，Supervisor 会自动降级到规则实现并继续，不会中断主链路；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
 - 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
 
@@ -187,7 +212,7 @@ npm run dev   # http://localhost:5173
 ## 启动四个服务
 
 1. **PostgreSQL**：`docker compose up -d postgres`
-2. **Java**：在 `java-service` 目录运行 `./mvnw spring-boot:run`（或 `mvn spring-boot:run`）
+2. **Java**：在 `java-service` 目录运行 `mvn spring-boot:run`（本文档采用；或用 Maven Wrapper）
 3. **Python**：`uv run fastapi dev app/main.py`（`python-agent-service` 目录）
 4. **前端**：`cd frontend && npm install && npm run dev`（`http://localhost:5173`）
 
@@ -310,8 +335,8 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/ecommerce_agent` | Java 数据源 |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` | `ecommerce` / `ecommerce_password` | 数据库账号 |
 | `python.agent.base-url` | `http://localhost:8000` | Java 调 Python 地址（可用 `PYTHON_AGENT_BASE_URL` 覆盖） |
-| `python.agent.connect-timeout-ms` | `3000` | 连接超时 |
-| `python.agent.read-timeout-ms` | `30000` | 读取超时 |
+| `python.agent.connect-timeout-ms` | `10000` | 连接超时 |
+| `python.agent.read-timeout-ms` | `120000` | 读取超时（留足多 Agent 串行 LLM 生成时间） |
 | `JAVA_API_BASE_URL` | `http://localhost:8080` | Python 调 Java 地址（环境变量覆盖） |
 | `LLM_ENABLED` | `true` | 是否启用真实 LLM（见上方「LLM 配置」） |
 | `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点（Ollama） |
@@ -324,6 +349,7 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 | `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | 本地 embedding 模型 |
 | `RAG_EMBEDDING_BASE_URL` | `http://localhost:11434/v1` | embeddings 端点（默认复用 LLM） |
 | `RAG_TOP_K` | `3` | 每类目召回块数 |
+| `IMAGE_REVIEW_ENABLED` | `true` | 是否对图片创意方案做本地 LLM 视觉审核（见上方「图片视觉审核」） |
 
 ---
 

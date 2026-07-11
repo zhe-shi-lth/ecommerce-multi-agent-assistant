@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getOperationPlans } from "../api/operations";
 import type { OperationPlan } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
@@ -8,6 +8,7 @@ export default function OperationPlans() {
   const [plans, setPlans] = useState<OperationPlan[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     getOperationPlans()
@@ -39,7 +40,12 @@ export default function OperationPlans() {
           </thead>
           <tbody>
             {plans.map((p) => (
-              <tr key={p.id}>
+              <tr
+                key={p.id}
+                className="clickable-row"
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/operation-plans/${p.id}`)}
+              >
                 <td>
                   <Link to={`/operation-plans/${p.id}`}>{p.id}</Link>
                 </td>
@@ -59,3 +65,4 @@ export default function OperationPlans() {
     </section>
   );
 }
+

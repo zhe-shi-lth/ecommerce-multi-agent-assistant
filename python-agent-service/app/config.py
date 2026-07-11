@@ -48,6 +48,9 @@ RAG_TOP_K = _as_int(os.getenv("RAG_TOP_K"), 3)
 RAG_CHUNK_SIZE = _as_int(os.getenv("RAG_CHUNK_SIZE"), 500)
 RAG_CHUNK_OVERLAP = _as_int(os.getenv("RAG_CHUNK_OVERLAP"), 50)
 
+# 图片视觉审核（可选；复用本地 LLM 对图片创意方案做合规/质量审核）
+IMAGE_REVIEW_ENABLED = _as_bool(os.getenv("IMAGE_REVIEW_ENABLED"), default=True)
+
 # 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
 BASE_DIR = Path(__file__).resolve().parents[1]
 RAG_KNOWLEDGE_PATH = (

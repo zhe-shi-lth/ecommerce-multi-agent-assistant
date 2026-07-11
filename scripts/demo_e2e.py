@@ -13,6 +13,14 @@ import sys
 import urllib.request
 import urllib.error
 
+# Windows 控制台默认 GBK，打印含非 GBK 字符（如异常信息里的箭头）会崩；
+# 统一按 UTF-8 输出，避免脚本在中文/异常场景下中断。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
 JAVA = "http://localhost:8080"
 PYTHON = "http://localhost:8000"
 
@@ -22,13 +30,13 @@ def post_json(url: str, payload: dict) -> dict:
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def get_json(url: str) -> object:
     req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

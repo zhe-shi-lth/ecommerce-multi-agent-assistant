@@ -3,6 +3,9 @@ from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
 from app.agents.order_fulfillment_agent import OrderFulfillmentAgent
 from app.agents.product_planning_agent import ProductPlanningAgent
 from app.agents.supervisor_agent import SupervisorAgent
+from app.llm import client as llm_client
+from app.llm.client import StubClient
+from app.schemas.agent_outputs import ImagePlan, ImageReviewResult
 from app.schemas.inventory import InventoryContext
 from app.schemas.order import OrderContext
 from app.schemas.product import ProductContext
@@ -69,6 +72,59 @@ def test_image_creative_agent_uses_product_selling_points():
     assert "办公室" in image_plan.scene_image_prompt
     assert image_plan.image_style
     assert image_plan.image_risk_notes
+    # 规则路径下也应产出确定性审核结果
+    review = image_plan.image_review_result
+    assert review is not None
+    assert review.reviewer == "rule"
+    assert review.risk_level in {"低风险", "中风险", "高风险"}
+    assert 0 <= review.overall_score <= 100
+
+
+def test_image_review_rule_based_maps_risk_notes():
+    image_plan = ImagePlan(
+        main_image_prompt="白色背景展示商品",
+        scene_image_prompt="场景图",
+        marketing_image_prompt="营销图",
+        image_style="电商风格",
+        image_risk_notes=["避免夸大功效", "避免使用侵权品牌元素"],
+    )
+    review = ImageCreativeAgent()._review_rule_based(image_plan, knowledge="")
+    assert review is not None
+    assert review.reviewer == "rule"
+    assert review.risk_level == "中风险"
+    assert review.overall_score == 70
+    assert "避免夸大功效" in review.issues
+
+
+def test_image_creative_agent_llm_review_attached(monkeypatch):
+    def factory(system, user, schema):
+        if schema is ImagePlan:
+            return ImagePlan(
+                main_image_prompt="主图",
+                scene_image_prompt="场景图",
+                marketing_image_prompt="营销图",
+                image_style="电商风格",
+                image_risk_notes=["避免夸大功效"],
+            )
+        if schema is ImageReviewResult:
+            return ImageReviewResult(
+                overall_score=92,
+                risk_level="低风险",
+                issues=[],
+                suggestions=["可直接使用"],
+                reviewer="llm",
+            )
+        raise AssertionError(f"unexpected schema {schema}")
+
+    product = sample_product()
+    product_plan = ProductPlanningAgent().run(product)  # 规则路径，先于 monkeypatch
+
+    monkeypatch.setattr(llm_client, "get_llm_client", lambda: StubClient(factory))
+    image_plan = ImageCreativeAgent().run(product, product_plan)
+
+    assert image_plan.image_review_result is not None
+    assert image_plan.image_review_result.reviewer == "llm"
+    assert image_plan.image_review_result.overall_score == 92
 
 
 def test_inventory_purchase_agent_flags_low_available_stock():
@@ -111,6 +167,7 @@ def test_supervisor_agent_runs_all_agents_and_summarizes_result():
     assert result.trace_id.startswith("trace_")
     assert result.product_plan.recommended_title
     assert result.image_plan.main_image_prompt
+    assert result.image_plan.image_review_result is not None
     assert result.inventory_plan.should_restock is True
     assert result.fulfillment_plan.can_ship is True
     assert result.final_summary
