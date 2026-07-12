@@ -12,5 +12,6 @@ public record OperationPlanCreateRequest(
         Map<String, Object> fulfillmentPlanJson,
         String finalSummary,
         Boolean manualReviewRequired,
-        String status) {
+        String status,
+        String line) {
 }

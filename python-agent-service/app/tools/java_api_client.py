@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+from uuid import uuid4
 
 import httpx
 from loguru import logger
@@ -99,3 +100,65 @@ class JavaApiClient:
     def _plan_status(result: OperationPlanResult) -> str:
         # Java 侧 ck_operation_plans_status 只允许 SUCCESS / PARTIAL_FAILED / FAILED
         return "PARTIAL_FAILED" if result.errors else "SUCCESS"
+
+    def create_product(
+        self,
+        name: str,
+        category: str,
+        description: str,
+        target_audience: str | None = None,
+        usage_scenario: str | None = None,
+    ) -> Optional[int]:
+        """线1上架：先在 Java 侧创建一条商品（DRAFT 状态），返回新建商品 id。"""
+        url = f"{self.base_url}/api/products"
+        payload = {
+            "name": name,
+            "category": category,
+            "description": description,
+            "costPrice": 0,
+            "salePrice": 0,
+            "targetAudience": target_audience,
+            "usageScenario": usage_scenario,
+            "status": "DRAFT",
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            pid = resp.json().get("id")
+            logger.info("线1 商品已创建 Java (id={})", pid)
+            return pid
+        except httpx.HTTPError as e:
+            logger.error("线1 创建商品到 Java 失败: {}", e)
+            return None
+
+    def persist_line1_plan(
+        self,
+        product_id: int,
+        product_plan: dict,
+        image_plan: dict,
+        final_summary: str,
+    ) -> Optional[int]:
+        """线1上架：落库一条仅含商品规划+图片创意的运营计划（无订单、line=LINE1_ONBOARDING）。"""
+        url = f"{self.base_url}/api/operation-plans"
+        payload = {
+            "traceId": f"line1_{uuid4().hex}",
+            "productId": product_id,
+            "orderId": None,
+            "productPlanJson": product_plan,
+            "imagePlanJson": image_plan,
+            "inventoryPlanJson": {},
+            "fulfillmentPlanJson": {},
+            "finalSummary": final_summary,
+            "manualReviewRequired": False,
+            "status": "SUCCESS",
+            "line": "LINE1_ONBOARDING",
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            op_id = resp.json().get("id")
+            logger.info("线1 运营计划已落库 Java (id={})", op_id)
+            return op_id
+        except httpx.HTTPError as e:
+            logger.error("线1 落库运营计划到 Java 失败: {}", e)
+            return None

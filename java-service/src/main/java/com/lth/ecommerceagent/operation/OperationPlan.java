@@ -34,9 +34,13 @@ public class OperationPlan {
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "order_id", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY, optional = true)
+    @JoinColumn(name = "order_id", nullable = true)
     private Order order;
+
+    // 业务线：LINE1_ONBOARDING=新品上架流水线；LINE2_MONITOR=每日监控（库存/履约）
+    @Column(name = "line", length = 40)
+    private String line;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "product_plan_json", nullable = false)
@@ -107,6 +111,14 @@ public class OperationPlan {
 
     public void setOrder(Order order) {
         this.order = order;
+    }
+
+    public String getLine() {
+        return line;
+    }
+
+    public void setLine(String line) {
+        this.line = line;
     }
 
     public Map<String, Object> getProductPlanJson() {

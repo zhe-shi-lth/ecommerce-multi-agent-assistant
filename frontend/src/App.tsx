@@ -6,6 +6,7 @@ import Inventories from "./pages/Inventories";
 import Orders from "./pages/Orders";
 import Favorites from "./pages/Favorites";
 import Dashboard from "./pages/Dashboard";
+import NewListing from "./pages/NewListing";
 
 export default function App() {
   return (
@@ -15,6 +16,9 @@ export default function App() {
         <nav>
           <NavLink to="/operation-plans" className="nav-link">
             运营计划
+          </NavLink>
+          <NavLink to="/new-listing" className="nav-link">
+            新品上架
           </NavLink>
           <NavLink to="/products" className="nav-link">
             商品
@@ -38,6 +42,7 @@ export default function App() {
           <Route path="/" element={<OperationPlans />} />
           <Route path="/operation-plans" element={<OperationPlans />} />
           <Route path="/operation-plans/:id" element={<OperationPlanDetail />} />
+          <Route path="/new-listing" element={<NewListing />} />
           <Route path="/products" element={<Products />} />
           <Route path="/inventories" element={<Inventories />} />
           <Route path="/orders" element={<Orders />} />

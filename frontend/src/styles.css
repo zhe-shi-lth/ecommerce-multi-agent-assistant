@@ -374,3 +374,64 @@ button:disabled {
 td .muted {
   margin-left: 6px;
 }
+
+/* ===== 线1 新品上架向导 ===== */
+.step-bar {
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 20px;
+  flex-wrap: wrap;
+}
+.step-bar li {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.step-bar li.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #eef3ff;
+}
+.listing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+}
+.listing-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.listing-form input,
+.listing-form textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.listing-review {
+  max-width: 760px;
+}
+.review-highlight {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.review-highlight p {
+  margin: 6px 0;
+}
+.secondary {
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border);
+}

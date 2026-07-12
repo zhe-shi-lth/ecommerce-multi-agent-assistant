@@ -18,5 +18,6 @@ public record OperationPlanResponse(
         String confirmationStatus,
         Instant confirmedAt,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        String line) {
 }

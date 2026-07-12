@@ -44,7 +44,7 @@ public class OperationPlanController {
     @PostMapping
     public ResponseEntity<OperationPlanResponse> create(@RequestBody OperationPlanCreateRequest request) {
         Product product = findProduct(request.productId());
-        Order order = findOrder(request.orderId());
+        Order order = request.orderId() != null ? findOrder(request.orderId()) : null;
         OperationPlan plan = new OperationPlan();
         apply(request, product, order, plan);
         OperationPlan saved = operationPlanRepository.save(plan);
@@ -133,7 +133,7 @@ public class OperationPlanController {
     public OperationPlanResponse update(@PathVariable Long id, @RequestBody OperationPlanCreateRequest request) {
         OperationPlan plan = findPlan(id);
         Product product = findProduct(request.productId());
-        Order order = findOrder(request.orderId());
+        Order order = request.orderId() != null ? findOrder(request.orderId()) : null;
         apply(request, product, order, plan);
         return toResponse(operationPlanRepository.save(plan));
     }
@@ -164,7 +164,9 @@ public class OperationPlanController {
     private void apply(OperationPlanCreateRequest request, Product product, Order order, OperationPlan plan) {
         plan.setTraceId(request.traceId());
         plan.setProduct(product);
-        plan.setOrder(order);
+        if (order != null) {
+            plan.setOrder(order);
+        }
         plan.setProductPlanJson(request.productPlanJson());
         plan.setImagePlanJson(request.imagePlanJson());
         plan.setInventoryPlanJson(request.inventoryPlanJson());
@@ -172,6 +174,7 @@ public class OperationPlanController {
         plan.setFinalSummary(request.finalSummary());
         plan.setManualReviewRequired(request.manualReviewRequired());
         plan.setStatus(request.status());
+        plan.setLine(request.line() != null ? request.line() : "LINE2_MONITOR");
     }
 
     private Product findProduct(Long id) {
@@ -190,11 +193,12 @@ public class OperationPlanController {
     }
 
     private OperationPlanResponse toResponse(OperationPlan p) {
+        Long orderId = p.getOrder() != null ? p.getOrder().getId() : null;
         return new OperationPlanResponse(
                 p.getId(),
                 p.getTraceId(),
                 p.getProduct().getId(),
-                p.getOrder().getId(),
+                orderId,
                 p.getProductPlanJson(),
                 p.getImagePlanJson(),
                 p.getInventoryPlanJson(),
@@ -205,6 +209,7 @@ public class OperationPlanController {
                 p.getConfirmationStatus(),
                 p.getConfirmedAt(),
                 p.getCreatedAt(),
-                p.getUpdatedAt());
+                p.getUpdatedAt(),
+                p.getLine());
     }
 }
