@@ -53,3 +53,10 @@ class FulfillmentPlan(BaseModel):
     risk_flags: list[str]
     manual_review_required: bool
     next_order_status: str
+    # 步骤 5：物流异常与售后联动（确定性内核推算）。可选、带默认值，向前兼容旧落库；
+    # Java fulfillment_plan_json 为通用 Map，前端 JsonView 自动渲染。
+    logistics_risk_level: str = "LOW"
+    anomaly_details: list[str] = []
+    suggested_actions: list[str] = []
+    after_sale_suggested: bool = False
+    after_sale_reason: str = ""

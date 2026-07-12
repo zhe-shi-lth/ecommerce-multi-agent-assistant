@@ -1,12 +1,12 @@
 # 电商超级个体 · 多 Agent 运营助手
 
-一个面向「电商超级个体」的多 Agent 运营助手 **第一期** 实现，目标为 **大框架、小闭环**：
+一个面向「电商超级个体」的多 Agent 运营助手，目标为 **大框架、小闭环**。第二期已在稳定主链路之上逐个增强 Agent 真实能力（本地 LLM 编排、分类知识库 RAG、本地图片视觉审核、库存需求预测、物流异常 + 售后联动、Supervisor 动态路由与失败重试、前端人工确认/驳回闭环）。
 
 - **Python 多 Agent 服务**：Supervisor 编排 4 个运营 Agent（选品规划 / 图像创意 / 库存采购 / 订单履约），结构化输出运营计划。
 - **Java Spring Boot 业务服务**：PostgreSQL 落库，提供商品 / 库存 / 订单 / 运营计划 / Agent 执行记录等 REST API。
 - **Java ↔ Python 双向 HTTP 闭环**：Java 编排入口加载业务数据并调用 Python 生成计划；Python 生成后通过 Tool API 把计划与执行明细写回 Java。
 
-> 第一期 **不接真实 LLM、不接真实电商 / 支付 / 物流 / 图片生成**。Agent 当前为规则式占位实现，专注于打通主链路与执行追踪。
+> **本地优先**：不接真实电商 / 支付 / 物流 / 图片生成 API。真实 LLM 走本地 Ollama（可选，关闭后全部降级为规则实现，主链路不中断）。前端通过 Docker Compose 内 nginx 反代访问 Java，无需改 Java CORS。
 
 ---
 
@@ -36,7 +36,7 @@
 
 ```
 .
-├── docker-compose.yml          # PostgreSQL 16
+├── docker-compose.yml          # 全栈：PostgreSQL + Java + Python + 前端(nginx 反代)
 ├── .env / .env.example         # 数据库与数据源配置
 ├── java-service/               # Spring Boot 业务服务 (JDK 21)
 │   └── src/main/java/com/lth/ecommerceagent/
@@ -51,6 +51,23 @@
 │       └── api/operation_plan.py      # 运营计划端点
 └── scripts/demo_e2e.py         # 端到端小闭环验证脚本
 ```
+
+---
+
+## 已增强能力（第二期）
+
+在稳定主链路之上逐步骤增强 Agent 真实能力，每一步均 **向后兼容、Java 落库契约不变、前端自动可见**：
+
+| 步骤 | 增强 | 关键设计 |
+| --- | --- | --- |
+| 0 | 接入本地 LLM（Ollama） | 5 个 Agent 结构化输出复用 Pydantic Schema；LLM 失败多级降级到规则实现，主链路不中断 |
+| 0.5 | 前端只读 SPA | React + Vite，查看计划/四类产出/Agent trace/商品库存订单 |
+| 1 | 商品规划增强 | SEO 关键词 + 淘宝/抖音/小红书多平台文案 |
+| 2 | 分类知识库 RAG | 本地 Markdown 知识库 + 内存 Chroma 向量检索，注入商品/图片 Agent（可选，关 RAG 不影响主链路） |
+| 3 | 图片视觉审核 | 本地 LLM 对创意方案做合规/质量审核，产出 `image_review_result`（可选，关则走规则启发式） |
+| 4 | 库存需求预测 | 确定性 `compute_forecast`：日均需求/预计售罄天数/补货量/风险等级；LLM 仅写可读原因，数字由预测决定 |
+| 5 | 物流异常 + 售后联动 | 本地确定性物流风险检测（未付款/地址不全/库存不足/大单分批/库存紧张/需复核）+ 处理建议 + 售后建议 |
+| 6 | Supervisor 动态路由 + 前端确认 | 按 `trigger_type` 条件路由（演示分支 `INVENTORY_REVIEW` 仅库存+履约）；LLM 失败重试 1 次再降级；前端可对计划「确认/驳回」并落库 |
 
 ---
 
@@ -225,6 +242,43 @@ npm run dev   # http://localhost:5173
 
 ---
 
+## 一键启动（Docker Compose 全栈）
+
+无需本机安装 JDK/Maven/Python/Node，一条命令起全栈（PostgreSQL + Java + Python + 前端，nginx 反代统一入口）：
+
+```bash
+docker compose up -d --build
+```
+
+启动后浏览器打开 **http://localhost**（nginx 已托管前端并把 `/api` 反代到 Java，无需改 Java CORS）。
+各服务健康检查：
+
+- Java：`GET http://localhost/health`（经 nginx）或 `http://localhost:8080/health`
+- Python：`GET http://localhost:8000/health`
+- 前端：`GET http://localhost/`
+
+默认 **规则模式**（`LLM_ENABLED=false` + `RAG_ENABLED=false`），完全离线可演示。已内置示例数据（商品/库存/订单 + 一条运营计划及 trace），打开即可浏览与「确认/驳回」。
+
+> 接入真实 LLM：本地装好 Ollama 并把 `python` 服务的 `LLM_ENABLED` 改为 `true`（在 `docker-compose.yml` 或 `.env` 中调整），如需 RAG 再把 `RAG_ENABLED=true` 并 `ollama pull nomic-embed-text`。镜像本身不含模型权重。
+
+### 手动四服务启动（本地开发）
+
+若不想用容器，也可按「运行前提」逐服务本地起（PostgreSQL 用 `docker compose up -d postgres`，其余见各小节）。前端开发期由 Vite 把 `/api` 代理到 Java（`:8080`）。
+
+---
+
+## 链路截图指南
+
+为作品集补充截图时，建议在本机跑起全栈后截取以下画面（演示数据已内置，无需先触发编排）：
+
+1. **计划列表**：前端「运营计划」页，展示 seed 的示例计划（状态、需人工审核）。
+2. **计划详情**：点开计划，展示四类产出（商品规划 / 图片创意 / 库存采购 / 订单履约）与每个 Agent 的执行 trace（输入 / 输出 / 错误）。
+3. **库存预测 / 物流异常**：在计划详情的「库存采购」「订单履约」块中可见 `daily_demand` / `days_to_stockout` / `logistics_risk_level` / `after_sale_suggested` 等增强字段。
+4. **确认 / 驳回闭环**：在计划详情点「确认计划」→ 确认状态变为 `CONFIRMED`；点「驳回计划」→ 变为 `REJECTED`（按钮随之禁用）。可截前后对比。
+5. **Swagger / 接口**：`http://localhost:8080/docs` 展示 Java REST API；`/api/operation-plans/{id}/confirm`、`/reject` 可在文档内直接试。
+
+---
+
 ## 接口清单
 
 ### Java 业务 API（base: `http://localhost:8080`）
@@ -255,6 +309,8 @@ npm run dev   # http://localhost:5173
 | GET | `/api/operation-plans/by-trace/{traceId}` | 按 trace 查计划 |
 | PUT | `/api/operation-plans/{id}` | 更新计划 |
 | DELETE | `/api/operation-plans/{id}` | 删除计划 |
+| POST | `/api/operation-plans/{id}/confirm` | 人工确认计划（置 `confirmation_status=CONFIRMED`） |
+| POST | `/api/operation-plans/{id}/reject` | 人工驳回计划（置 `confirmation_status=REJECTED`） |
 | POST | `/api/agent-runs` | 创建 Agent 执行记录（Python 写回用） |
 | GET | `/api/agent-runs` | 记录列表 |
 | GET | `/api/agent-runs/{id}` | 记录详情 |

@@ -15,6 +15,8 @@ export interface OperationPlan {
   finalSummary: string;
   manualReviewRequired: boolean;
   status: string;
+  confirmationStatus: string;
+  confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -71,4 +73,22 @@ export interface Order {
   fulfillmentSuggestionStatus: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FavoriteCopy {
+  id: number;
+  label: string;
+  content: string;
+  tags: string | null;
+  sourcePlanId: number | null;
+  createdAt: string;
+}
+
+export interface DailySales {
+  id: number;
+  productId: number;
+  saleDate: string;
+  revenue: number;
+  units: number;
+  orderCount: number;
 }

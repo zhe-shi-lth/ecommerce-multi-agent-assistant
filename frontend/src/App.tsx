@@ -4,6 +4,8 @@ import OperationPlanDetail from "./pages/OperationPlanDetail";
 import Products from "./pages/Products";
 import Inventories from "./pages/Inventories";
 import Orders from "./pages/Orders";
+import Favorites from "./pages/Favorites";
+import Dashboard from "./pages/Dashboard";
 
 export default function App() {
   return (
@@ -23,6 +25,12 @@ export default function App() {
           <NavLink to="/orders" className="nav-link">
             订单
           </NavLink>
+          <NavLink to="/favorites" className="nav-link">
+            收藏夹
+          </NavLink>
+          <NavLink to="/dashboard" className="nav-link">
+            销售监控
+          </NavLink>
         </nav>
       </aside>
       <main className="content">
@@ -33,6 +41,8 @@ export default function App() {
           <Route path="/products" element={<Products />} />
           <Route path="/inventories" element={<Inventories />} />
           <Route path="/orders" element={<Orders />} />
+          <Route path="/favorites" element={<Favorites />} />
+          <Route path="/dashboard" element={<Dashboard />} />
         </Routes>
       </main>
     </div>

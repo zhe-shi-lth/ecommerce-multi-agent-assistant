@@ -253,3 +253,124 @@ a {
   color: var(--muted);
   margin-left: 4px;
 }
+
+/* 基础按钮 */
+button {
+  font: inherit;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 导出 */
+.export-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.export-result {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.export-result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.export-result textarea {
+  width: 100%;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
+}
+
+/* 收藏夹 */
+.favorite-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.favorite-head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.favorite-tags {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.favorite-content {
+  white-space: pre-wrap;
+  background: #fbfbfc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.favorite-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* 监控 */
+.line-chart {
+  width: 100%;
+  max-width: 640px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.stock-bar {
+  display: inline-block;
+  width: 120px;
+  height: 10px;
+  background: #eef0f3;
+  border-radius: 5px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+
+.stock-fill {
+  height: 100%;
+}
+
+td .muted {
+  margin-left: 6px;
+}

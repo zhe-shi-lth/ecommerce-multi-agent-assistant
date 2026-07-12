@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getOperationPlan } from "../api/operations";
+import { confirmOperationPlan, createFavoriteCopy, exportOperationPlan, getOperationPlan, rejectOperationPlan } from "../api/operations";
 import { getAgentRunsByPlan } from "../api/agents";
 import type { AgentRun, Json, OperationPlan } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
@@ -17,7 +17,13 @@ export default function OperationPlanDetail() {
   const [plan, setPlan] = useState<OperationPlan | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [acting, setActing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [exportContent, setExportContent] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [favSaved, setFavSaved] = useState(false);
 
   useEffect(() => {
     Promise.all([getOperationPlan(planId), getAgentRunsByPlan(planId)])
@@ -33,6 +39,58 @@ export default function OperationPlanDetail() {
   if (error) return <p className="error">加载失败：{error}</p>;
   if (!plan) return <p className="muted">未找到计划 {planId}</p>;
 
+  const confirmationStatus = plan.confirmationStatus ?? "PENDING";
+  const pending = confirmationStatus === "PENDING";
+
+  async function handleDecision(kind: "confirm" | "reject") {
+    setActing(true);
+    setActionError(null);
+    try {
+      const updated =
+        kind === "confirm"
+          ? await confirmOperationPlan(planId)
+          : await rejectOperationPlan(planId);
+      setPlan(updated);
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function handleExport(platform: string) {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const res = await exportOperationPlan(planId, platform);
+      setExportContent(res.content);
+    } catch (e) {
+      setExportError(String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function copyExport() {
+    if (exportContent && navigator.clipboard) {
+      navigator.clipboard.writeText(exportContent);
+    }
+  }
+
+  async function handleFavorite() {
+    if (!plan) return;
+    try {
+      const exp = await exportOperationPlan(planId, "taobao");
+      const label =
+        (plan.productPlanJson?.["recommended_title"] as string) || `计划 ${plan.id} 文案`;
+      await createFavoriteCopy({ label, content: exp.content, sourcePlanId: plan.id });
+      setFavSaved(true);
+      setTimeout(() => setFavSaved(false), 2000);
+    } catch (e) {
+      setExportError(String(e));
+    }
+  }
+
   const blocks: PlanBlock[] = [
     { title: "商品规划 (ProductPlan)", data: plan.productPlanJson },
     { title: "图片创意 (ImagePlan)", data: plan.imagePlanJson },
@@ -46,8 +104,56 @@ export default function OperationPlanDetail() {
       <div className="meta">
         <span>Trace: <span className="mono">{plan.traceId}</span></span>
         <span>状态: <StatusBadge status={plan.status} /></span>
+        <span>确认状态: <StatusBadge status={confirmationStatus} /></span>
         <span>需人工审核: {plan.manualReviewRequired ? "是" : "否"}</span>
       </div>
+
+      <div className="confirm-actions">
+        {pending ? (
+          <>
+            <button onClick={() => handleDecision("confirm")} disabled={acting}>
+              {acting ? "处理中…" : "确认计划"}
+            </button>
+            <button onClick={() => handleDecision("reject")} disabled={acting}>
+              {acting ? "处理中…" : "驳回计划"}
+            </button>
+          </>
+        ) : (
+          <p className="muted">
+            已{confirmationStatus === "CONFIRMED" ? "确认" : "驳回"}
+            {plan.confirmedAt ? `（${plan.confirmedAt}）` : ""}
+          </p>
+        )}
+        {actionError && <p className="error">操作失败：{actionError}</p>}
+      </div>
+
+      <div className="export-actions">
+        <span>导出到：</span>
+        <button onClick={() => handleExport("taobao")} disabled={exporting}>
+          淘宝
+        </button>
+        <button onClick={() => handleExport("douyin")} disabled={exporting}>
+          抖音
+        </button>
+        <button onClick={() => handleExport("xiaohongshu")} disabled={exporting}>
+          小红书
+        </button>
+        <button onClick={handleFavorite} disabled={exporting}>
+          收藏文案
+        </button>
+        {exporting && <span className="muted">生成中…</span>}
+        {favSaved && <span className="muted">已收藏</span>}
+        {exportError && <p className="error">导出失败：{exportError}</p>}
+      </div>
+      {exportContent && (
+        <div className="export-result">
+          <div className="export-result-head">
+            <span>已生成，可复制粘贴：</span>
+            <button onClick={copyExport}>复制</button>
+          </div>
+          <textarea readOnly value={exportContent} rows={10} />
+        </div>
+      )}
 
       <h3>总结</h3>
       <p className="summary">{plan.finalSummary}</p>

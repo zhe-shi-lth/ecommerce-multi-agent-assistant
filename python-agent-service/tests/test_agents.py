@@ -5,7 +5,13 @@ from app.agents.product_planning_agent import ProductPlanningAgent
 from app.agents.supervisor_agent import SupervisorAgent
 from app.llm import client as llm_client
 from app.llm.client import StubClient
-from app.schemas.agent_outputs import ImagePlan, ImageReviewResult
+from app.schemas.agent_outputs import (
+    FulfillmentPlan,
+    ImagePlan,
+    ImageReviewResult,
+    InventoryPlan,
+    ProductPlan,
+)
 from app.schemas.inventory import InventoryContext
 from app.schemas.order import OrderContext
 from app.schemas.product import ProductContext
@@ -179,3 +185,115 @@ def test_supervisor_agent_runs_all_agents_and_summarizes_result():
         "INVENTORY_PURCHASE_AGENT",
         "ORDER_FULFILLMENT_AGENT",
     ]
+
+
+def test_supervisor_routes_inventory_review_skips_product_and_image():
+    result = SupervisorAgent().run(
+        product=sample_product(),
+        inventory=sample_low_inventory(),
+        order=sample_paid_order(),
+        trigger_type="INVENTORY_REVIEW",
+    )
+    # 动态路由：仅库存 + 履约，跳过商品规划与图片创意
+    assert [run.agent_name for run in result.agent_runs] == [
+        "SUPERVISOR_AGENT",
+        "INVENTORY_PURCHASE_AGENT",
+        "ORDER_FULFILLMENT_AGENT",
+    ]
+    assert result.product_plan is None
+    assert result.image_plan is None
+    assert result.inventory_plan is not None
+    assert result.fulfillment_plan is not None
+
+
+class _FlakyClient:
+    """前 fail_times 次调用抛异常，其后正常返回（模拟瞬时 LLM 失败 + 重试成功）。"""
+
+    def __init__(self, factory, fail_times=1):
+        self._factory = factory
+        self._fail_times = fail_times
+        self.calls = 0
+
+    def generate(self, system_prompt, user_prompt, schema):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise RuntimeError("transient LLM failure")
+        return self._factory(system_prompt, user_prompt, schema)
+
+
+class _AlwaysFailClient:
+    def generate(self, system_prompt, user_prompt, schema):
+        raise RuntimeError("LLM down")
+
+
+def _stub_factory(system, user, schema):
+    if schema is ProductPlan:
+        return ProductPlan(
+            recommended_title="stub-title",
+            selling_points=["a", "b", "c"],
+            detail_description="d",
+            target_user_summary="t",
+            listing_suggestion="l",
+            seo_keywords=["k"],
+            meta_description="m",
+            platform_copies={"taobao": "t", "douyin": "d", "xiaohongshu": "x"},
+        )
+    if schema is ImagePlan:
+        return ImagePlan(
+            main_image_prompt="m",
+            scene_image_prompt="s",
+            marketing_image_prompt="mk",
+            image_style="stub",
+            image_risk_notes=[],
+        )
+    if schema is InventoryPlan:
+        return InventoryPlan(
+            inventory_status="ENOUGH",
+            should_restock=False,
+            suggested_restock_quantity=0,
+            restock_priority="LOW",
+            reason="stub",
+        )
+    if schema is FulfillmentPlan:
+        return FulfillmentPlan(
+            can_ship=True,
+            fulfillment_status="READY_TO_SHIP",
+            risk_flags=[],
+            manual_review_required=False,
+            next_order_status="READY_TO_SHIP",
+        )
+    raise AssertionError(f"unexpected schema {schema}")
+
+
+def test_supervisor_retries_transient_llm_failure(monkeypatch):
+    client = _FlakyClient(_stub_factory, fail_times=1)
+    monkeypatch.setattr(llm_client, "get_llm_client", lambda: client)
+
+    result = SupervisorAgent().run(
+        product=sample_product(),
+        inventory=sample_low_inventory(),
+        order=sample_paid_order(),
+        trigger_type="GENERATE_OPERATION_PLAN",
+    )
+    # 重试成功后应无错误记录，且使用 LLM（stub）输出
+    assert result.errors == []
+    assert result.product_plan.recommended_title == "stub-title"
+    assert client.calls >= 2  # 至少一次失败 + 一次重试
+    assert all(run.status == "SUCCESS" for run in result.agent_runs if run.agent_name != "SUPERVISOR_AGENT")
+
+
+def test_supervisor_degrades_to_rule_on_persistent_failure(monkeypatch):
+    monkeypatch.setattr(llm_client, "get_llm_client", lambda: _AlwaysFailClient())
+
+    result = SupervisorAgent().run(
+        product=sample_product(),
+        inventory=sample_low_inventory(),
+        order=sample_paid_order(),
+        trigger_type="GENERATE_OPERATION_PLAN",
+    )
+    # 多次失败仍降级到规则实现，主链路不中断（产出有效 plan）
+    assert result.errors  # 记录了失败
+    assert result.product_plan is not None
+    assert result.product_plan.recommended_title  # 规则路径仍产出
+    assert result.image_plan is not None
+    assert result.fulfillment_plan is not None

@@ -1,6 +1,10 @@
 package com.lth.ecommerceagent.operation;
 
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -56,6 +61,66 @@ public class OperationPlanController {
         return toResponse(findPlan(id));
     }
 
+    @GetMapping("/{id}/export")
+    public Map<String, String> export(@PathVariable Long id, @RequestParam String platform) {
+        OperationPlan plan = findPlan(id);
+        String content = formatForPlatform(plan, platform);
+        Map<String, String> result = new HashMap<>();
+        result.put("platform", platform);
+        result.put("content", content);
+        return result;
+    }
+
+    // 按平台把运营计划格式化为可直接使用/粘贴的文案
+    private String formatForPlatform(OperationPlan plan, String platform) {
+        Map<String, Object> p = plan.getProductPlanJson();
+        String title = asString(p.get("recommended_title"));
+        List<Object> points = asList(p.get("selling_points"));
+        String detail = asString(p.get("detail_description"));
+        String listing = asString(p.get("listing_suggestion"));
+        Map<String, Object> copies = asMap(p.get("platform_copies"));
+        List<Object> keywords = asList(p.get("seo_keywords"));
+        String line = System.lineSeparator();
+        switch (platform.toLowerCase()) {
+            case "taobao":
+                StringBuilder tb = new StringBuilder();
+                tb.append("<h1>").append(title).append("</h1>").append(line);
+                tb.append("<p>").append(detail).append("</p>").append(line).append("<ul>");
+                for (Object pt : points) {
+                    tb.append("<li>").append(asString(pt)).append("</li>");
+                }
+                return tb.append("</ul>").append(line).append("<p>").append(listing).append("</p>")
+                        .toString();
+            case "douyin":
+                String douyin = asString(copies.get("douyin"));
+                return "【标题】" + title + line + "【文案】" + (douyin.isEmpty() ? detail : douyin)
+                        + line + "【话题】" + keywords.stream().map(k -> "#" + asString(k))
+                        .collect(Collectors.joining(" "));
+            case "xiaohongshu":
+                String xhs = asString(copies.get("xiaohongshu"));
+                return "【正文】" + (xhs.isEmpty() ? detail : xhs) + line + "【标签】"
+                        + keywords.stream().map(k -> "#" + asString(k)).collect(Collectors.joining(" "));
+            default:
+                return "【标题】" + title + line + "【卖点】"
+                        + points.stream().map(this::asString).collect(Collectors.joining("、")) + line
+                        + "【详情】" + detail;
+        }
+    }
+
+    private String asString(Object o) {
+        return o == null ? "" : String.valueOf(o);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> asList(Object o) {
+        return o instanceof List ? (List<Object>) o : List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object o) {
+        return o instanceof Map ? (Map<String, Object>) o : Map.of();
+    }
+
     @GetMapping("/by-trace/{traceId}")
     public OperationPlanResponse getByTrace(@PathVariable String traceId) {
         OperationPlan plan = operationPlanRepository.findByTraceId(traceId)
@@ -78,6 +143,22 @@ public class OperationPlanController {
         OperationPlan plan = findPlan(id);
         operationPlanRepository.delete(plan);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/confirm")
+    public OperationPlanResponse confirm(@PathVariable Long id) {
+        OperationPlan plan = findPlan(id);
+        plan.setConfirmationStatus("CONFIRMED");
+        plan.setConfirmedAt(Instant.now());
+        return toResponse(operationPlanRepository.save(plan));
+    }
+
+    @PostMapping("/{id}/reject")
+    public OperationPlanResponse reject(@PathVariable Long id) {
+        OperationPlan plan = findPlan(id);
+        plan.setConfirmationStatus("REJECTED");
+        plan.setConfirmedAt(Instant.now());
+        return toResponse(operationPlanRepository.save(plan));
     }
 
     private void apply(OperationPlanCreateRequest request, Product product, Order order, OperationPlan plan) {
@@ -121,6 +202,8 @@ public class OperationPlanController {
                 p.getFinalSummary(),
                 p.getManualReviewRequired(),
                 p.getStatus(),
+                p.getConfirmationStatus(),
+                p.getConfirmedAt(),
                 p.getCreatedAt(),
                 p.getUpdatedAt());
     }

@@ -63,6 +63,12 @@ public class OperationPlan {
     @Column(nullable = false, length = 40)
     private String status;
 
+    @Column(name = "confirmation_status", nullable = false, length = 40)
+    private String confirmationStatus = "PENDING";
+
+    @Column(name = "confirmed_at")
+    private Instant confirmedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -157,6 +163,22 @@ public class OperationPlan {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getConfirmationStatus() {
+        return confirmationStatus;
+    }
+
+    public void setConfirmationStatus(String confirmationStatus) {
+        this.confirmationStatus = confirmationStatus;
+    }
+
+    public Instant getConfirmedAt() {
+        return confirmedAt;
+    }
+
+    public void setConfirmedAt(Instant confirmedAt) {
+        this.confirmedAt = confirmedAt;
     }
 
     public Instant getCreatedAt() {

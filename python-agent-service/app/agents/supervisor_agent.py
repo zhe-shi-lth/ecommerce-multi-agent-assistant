@@ -5,12 +5,22 @@ from app.agents.image_creative_agent import ImageCreativeAgent
 from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
 from app.agents.order_fulfillment_agent import OrderFulfillmentAgent
 from app.agents.product_planning_agent import ProductPlanningAgent
-from app.schemas.agent_outputs import FulfillmentPlan, ImagePlan, InventoryPlan, ProductPlan
+from app.rag.service import get_knowledge_service
 from app.schemas.inventory import InventoryContext
 from app.schemas.operation_plan import AgentRunRecord, OperationPlanResult
 from app.schemas.order import OrderContext
 from app.schemas.product import ProductContext
-from app.rag.service import get_knowledge_service
+
+# 条件路由表：trigger_type -> 有序步骤列表。未知 trigger 默认全量（保持向后兼容）。
+_ROUTING: dict[str, list[str]] = {
+    "GENERATE_OPERATION_PLAN": ["product", "image", "inventory", "fulfillment"],
+    # 演示用分支：只看库存与履约，跳过商品规划/图片创意（体现动态路由）
+    "INVENTORY_REVIEW": ["inventory", "fulfillment"],
+}
+_DEFAULT_STEPS = ["product", "image", "inventory", "fulfillment"]
+
+# LLM 调用失败后的重试次数（仍失败则降级规则实现，不中断主链路）。
+_LLM_RETRY = 1
 
 
 class SupervisorAgent:
@@ -36,47 +46,54 @@ class SupervisorAgent:
         # 检索一次分类知识库，下传给商品规划与图片创意两个 Agent
         knowledge = get_knowledge_service().retrieve_for_product(product)
 
-        product_plan, product_run = self._safe_run(
-            "PRODUCT_PLANNING_AGENT",
-            lambda: self.product_agent.run(product, knowledge),
-            lambda: self.product_agent._rule_based_run(product, knowledge),
-            {"product": product.model_dump(), "retrieved_knowledge": knowledge},
-            errors,
-        )
-        agent_runs.append(product_run)
+        product_plan = image_plan = inventory_plan = fulfillment_plan = None
+        steps = _ROUTING.get(trigger_type, _DEFAULT_STEPS)
 
-        image_plan, image_run = self._safe_run(
-            "IMAGE_CREATIVE_AGENT",
-            lambda: self.image_agent.run(product, product_plan, knowledge),
-            lambda: self.image_agent._rule_based_run(product, product_plan, knowledge),
-            {
-                "product": product.model_dump(),
-                "product_plan": product_plan.model_dump(),
-                "retrieved_knowledge": knowledge,
-            },
-            errors,
-        )
-        agent_runs.append(image_run)
+        for step in steps:
+            if step == "product":
+                product_plan, run = self._safe_run(
+                    "PRODUCT_PLANNING_AGENT",
+                    lambda: self.product_agent.run(product, knowledge),
+                    lambda: self.product_agent._rule_based_run(product, knowledge),
+                    {"product": product.model_dump(), "retrieved_knowledge": knowledge},
+                    errors,
+                )
+                agent_runs.append(run)
+            elif step == "image":
+                image_plan, run = self._safe_run(
+                    "IMAGE_CREATIVE_AGENT",
+                    lambda: self.image_agent.run(product, product_plan, knowledge),
+                    lambda: self.image_agent._rule_based_run(product, product_plan, knowledge),
+                    {
+                        "product": product.model_dump(),
+                        "product_plan": product_plan.model_dump() if product_plan else None,
+                        "retrieved_knowledge": knowledge,
+                    },
+                    errors,
+                )
+                agent_runs.append(run)
+            elif step == "inventory":
+                inventory_plan, run = self._safe_run(
+                    "INVENTORY_PURCHASE_AGENT",
+                    lambda: self.inventory_agent.run(inventory, order),
+                    lambda: self.inventory_agent._rule_based_run(inventory, order),
+                    {"inventory": inventory.model_dump(), "order": order.model_dump()},
+                    errors,
+                )
+                agent_runs.append(run)
+            elif step == "fulfillment":
+                fulfillment_plan, run = self._safe_run(
+                    "ORDER_FULFILLMENT_AGENT",
+                    lambda: self.fulfillment_agent.run(order, inventory),
+                    lambda: self.fulfillment_agent._rule_based_run(order, inventory),
+                    {"order": order.model_dump(), "inventory": inventory.model_dump()},
+                    errors,
+                )
+                agent_runs.append(run)
 
-        inventory_plan, inventory_run = self._safe_run(
-            "INVENTORY_PURCHASE_AGENT",
-            lambda: self.inventory_agent.run(inventory, order),
-            lambda: self.inventory_agent._rule_based_run(inventory, order),
-            {"inventory": inventory.model_dump(), "order": order.model_dump()},
-            errors,
+        manual_review_required = bool(
+            fulfillment_plan and fulfillment_plan.manual_review_required
         )
-        agent_runs.append(inventory_run)
-
-        fulfillment_plan, fulfillment_run = self._safe_run(
-            "ORDER_FULFILLMENT_AGENT",
-            lambda: self.fulfillment_agent.run(order, inventory),
-            lambda: self.fulfillment_agent._rule_based_run(order, inventory),
-            {"order": order.model_dump(), "inventory": inventory.model_dump()},
-            errors,
-        )
-        agent_runs.append(fulfillment_run)
-
-        manual_review_required = fulfillment_plan.manual_review_required
         final_summary = self._summarize(
             product_plan=product_plan,
             image_plan=image_plan,
@@ -108,17 +125,27 @@ class SupervisorAgent:
         )
 
     def _safe_run(self, agent_name: str, run_fn, rule_fn, input_json: dict, errors: list[dict]):
-        """运行 Agent：成功记 SUCCESS；LLM/异常失败记 FAILED 并降级到规则实现，链路继续。"""
+        """运行 Agent：成功记 SUCCESS；LLM/异常失败按重试次数重试，仍失败则降级到规则实现，链路继续。
+
+        重试仅作用于 LLM 路径（run_fn）；降级后 rule_fn 为确定性兜底，不再重试。
+        """
         start = perf_counter()
-        try:
-            output = run_fn()
-            status = "SUCCESS"
-            error_message = None
-        except Exception as exc:  # noqa: BLE001
-            error_message = f"{type(exc).__name__}: {exc}"
-            output = rule_fn()
-            status = "FAILED"
-            errors.append({"agent": agent_name, "error": error_message})
+        output = None
+        status = "SUCCESS"
+        error_message = None
+
+        for attempt in range(_LLM_RETRY + 1):
+            try:
+                output = run_fn()
+                break
+            except Exception as exc:  # noqa: BLE001
+                error_message = f"{type(exc).__name__}: {exc}"
+                if attempt < _LLM_RETRY:
+                    continue
+                output = rule_fn()
+                status = "FAILED"
+                errors.append({"agent": agent_name, "error": error_message})
+
         duration_ms = int((perf_counter() - start) * 1000)
         record = AgentRunRecord(
             agent_name=agent_name,
@@ -132,17 +159,24 @@ class SupervisorAgent:
 
     def _summarize(
         self,
-        product_plan: ProductPlan,
-        image_plan: ImagePlan,
-        inventory_plan: InventoryPlan,
-        fulfillment_plan: FulfillmentPlan,
+        product_plan,
+        image_plan,
+        inventory_plan,
+        fulfillment_plan,
         trigger_type: str,
     ) -> str:
-        return (
-            f"触发类型 {trigger_type}。"
-            f"商品建议标题为：{product_plan.recommended_title}。"
-            f"图片风格建议为：{image_plan.image_style}。"
-            f"库存状态为：{inventory_plan.inventory_status}，"
-            f"补货优先级为：{inventory_plan.restock_priority}。"
-            f"订单下一步建议状态为：{fulfillment_plan.next_order_status}。"
-        )
+        parts = [f"触发类型 {trigger_type}。"]
+        if product_plan:
+            parts.append(f"商品建议标题为：{product_plan.recommended_title}。")
+        if image_plan:
+            parts.append(f"图片风格建议为：{image_plan.image_style}。")
+        if inventory_plan:
+            parts.append(
+                f"库存状态为：{inventory_plan.inventory_status}，"
+                f"补货优先级为：{inventory_plan.restock_priority}。"
+            )
+        if fulfillment_plan:
+            parts.append(
+                f"订单下一步建议状态为：{fulfillment_plan.next_order_status}。"
+            )
+        return "".join(parts)

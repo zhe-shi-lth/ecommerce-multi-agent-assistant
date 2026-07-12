@@ -17,5 +17,69 @@ services:
       timeout: 5s
       retries: 5
 
+  java:
+    build:
+      context: ./java-service
+    container_name: ecommerce-agent-java
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYTHON_AGENT_BASE_URL: http://python:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  python:
+    build:
+      context: ./python-agent-service
+    container_name: ecommerce-agent-python
+    restart: unless-stopped
+    # 默认规则模式（LLM_ENABLED=false）+ 关闭本地 RAG（RAG_ENABLED=false），离线可跑；
+    # 接入真实 LLM 见 README「LLM 配置」，并把 Ollama 也纳入 compose 即可。
+    environment:
+      LLM_ENABLED: "false"
+      RAG_ENABLED: "false"
+      JAVA_API_BASE_URL: http://java:8080
+    depends_on:
+      java:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ecommerce-agent-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - java
+      - python
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ -O /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+networks:
+  backend:
+
 volumes:
   postgres_data:

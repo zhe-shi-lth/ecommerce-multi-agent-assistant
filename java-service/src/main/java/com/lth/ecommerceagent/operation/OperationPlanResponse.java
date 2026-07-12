@@ -15,6 +15,8 @@ public record OperationPlanResponse(
         String finalSummary,
         Boolean manualReviewRequired,
         String status,
+        String confirmationStatus,
+        Instant confirmedAt,
         Instant createdAt,
         Instant updatedAt) {
 }

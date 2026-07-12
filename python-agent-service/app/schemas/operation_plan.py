@@ -24,10 +24,10 @@ class AgentRunRecord(BaseModel):
 
 class OperationPlanResult(BaseModel):
     trace_id: str
-    product_plan: ProductPlan
-    image_plan: ImagePlan
-    inventory_plan: InventoryPlan
-    fulfillment_plan: FulfillmentPlan
+    product_plan: ProductPlan | None = None
+    image_plan: ImagePlan | None = None
+    inventory_plan: InventoryPlan | None = None
+    fulfillment_plan: FulfillmentPlan | None = None
     final_summary: str = Field(min_length=1)
     manual_review_required: bool
     errors: list[dict]
