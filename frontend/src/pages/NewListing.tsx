@@ -1,15 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   finalizeListing,
   generateImagePlan,
   generateProductPlan,
-  type NewProductIdea,
 } from "../api/line1";
-import type { Json } from "../api/types";
+import { getProducts } from "../api/products";
+import type { Json, Product } from "../api/types";
 import JsonView from "../components/JsonView";
+import PageHeader from "../components/PageHeader";
 
-type Step = 0 | 1 | 2 | 3;
+// 平台定义：小红书当前可勾选，淘宝/抖音留位灰显。
+const PLATFORMS = [
+  { key: "xiaohongshu", label: "小红书", enabled: true },
+  { key: "taobao", label: "淘宝", enabled: false },
+  { key: "douyin", label: "抖音", enabled: false },
+];
+
+type Phase = "select" | "copy" | "upload" | "image" | "done";
 
 function field(obj: Json | null | undefined, key: string): Json | undefined {
   if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj[key];
@@ -26,35 +34,79 @@ function asMap(v: Json | undefined): Record<string, Json> {
   return {};
 }
 
+const STEP_LABELS = ["选商品+平台", "上传参考图", "图片审批", "文案审批", "完成上架"];
+
 export default function NewListing() {
   const navigate = useNavigate();
-  const [step, setStep] = useState<Step>(0);
+  const [phase, setPhase] = useState<Phase>("select");
 
-  const [idea, setIdea] = useState<NewProductIdea>({
-    name: "",
-    category: "",
-    description: "",
-    targetAudience: "",
-    usageScenario: "",
-  });
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selected, setSelected] = useState<number[]>([]); // 勾选的商品 id
+  const [platforms, setPlatforms] = useState<string[]>(["xiaohongshu"]);
 
+  const [index, setIndex] = useState(0); // 当前处理到第几个选中商品
   const [productPlan, setProductPlan] = useState<Json | null>(null);
   const [imagePlan, setImagePlan] = useState<Json | null>(null);
+  const [results, setResults] = useState<{ productId: number; operationPlanId: number | null }[]>([]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function setField(key: keyof NewProductIdea, value: string) {
-    setIdea((prev) => ({ ...prev, [key]: value }));
+  useEffect(() => {
+    getProducts()
+      .then(setProducts)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const selectedProducts = products.filter((p) => selected.includes(p.id));
+  const current = selectedProducts[index];
+  const platformCopies = productPlan ? asMap(field(productPlan, "platform_copies")) : {};
+  const imgMain = imagePlan ? asString(field(imagePlan, "main_image_url")) : "";
+  const imgScene = imagePlan ? asString(field(imagePlan, "scene_image_url")) : "";
+  const imgMarketing = imagePlan ? asString(field(imagePlan, "marketing_image_url")) : "";
+
+  // 图生图：用户上传的参考图（base64 data URL），可选。
+  const [refImage, setRefImage] = useState<string | null>(null);
+  const [refName, setRefName] = useState<string>("");
+
+  function toggleProduct(id: number) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+  function togglePlatform(key: string) {
+    if (!PLATFORMS.find((p) => p.key === key)?.enabled) return;
+    setPlatforms((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
   }
 
-  async function handleGenerateCopy() {
+  // 进入某个选中商品的处理流程：先到「上传参考图」步骤。
+  // 文案（productPlan）延后到生成图片时再按需生成——因为图生图/文生图依赖文案卖点。
+  function startProduct(i: number) {
+    setIndex(i);
+    setProductPlan(null);
+    setImagePlan(null);
+    setRefImage(null);
+    setRefName("");
+    setError(null);
+    setPhase("upload");
+  }
+
+  // 上传参考图后进入图片步骤：先确保文案已生成（图生成依赖文案卖点），再生成图片。
+  async function proceedToImages(referenceImage?: string) {
     setBusy(true);
     setError(null);
     try {
-      const plan = await generateProductPlan(idea);
-      setProductPlan(plan);
-      setStep(1);
+      let plan = productPlan;
+      if (!plan) {
+        plan = await generateProductPlan({ product_id: current.id, platforms });
+        setProductPlan(plan);
+      }
+      const img = await generateImagePlan({
+        product_id: current.id,
+        platforms,
+        product_plan: plan,
+        ...(referenceImage ? { reference_image: referenceImage } : {}),
+      });
+      setImagePlan(img);
+      setPhase("image");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -62,18 +114,24 @@ export default function NewListing() {
     }
   }
 
-  async function handleGenerateImage() {
-    if (!productPlan) return;
-    setBusy(true);
-    setError(null);
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onPickRef(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
     try {
-      const img = await generateImagePlan(idea, productPlan);
-      setImagePlan(img);
-      setStep(2);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
+      const url = await fileToDataUrl(file);
+      setRefImage(url);
+      setRefName(file.name);
+    } catch (err) {
+      setError(String(err));
     }
   }
 
@@ -82,13 +140,18 @@ export default function NewListing() {
     setBusy(true);
     setError(null);
     try {
-      const res = await finalizeListing(idea, productPlan, imagePlan);
-      if (!res.ok || res.operationPlanId == null) {
-        setError("上架落库失败（请确认 Java 服务已启动）：" + JSON.stringify(res));
-        return;
+      const res = await finalizeListing({
+        product_id: current.id,
+        platforms,
+        product_plan: productPlan,
+        image_plan: imagePlan,
+      });
+      setResults((prev) => [...prev, { productId: current.id, operationPlanId: res.operationPlanId }]);
+      if (index + 1 < selectedProducts.length) {
+        startProduct(index + 1);
+      } else {
+        setPhase("done");
       }
-      setStep(3);
-      setTimeout(() => navigate(`/operation-plans/${res.operationPlanId}`), 600);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -96,125 +159,329 @@ export default function NewListing() {
     }
   }
 
-  const platformCopies = productPlan ? asMap(field(productPlan, "platform_copies")) : {};
+  function handleExport() {
+    if (!productPlan) return;
+    const text = [
+      asString(field(productPlan, "recommended_title")),
+      ...asList(field(productPlan, "selling_points")),
+      asString(field(productPlan, "detail_description")),
+      "",
+      "【平台文案】",
+      ...platforms.map((pk) => `${pk}：${asString(platformCopies[pk])}`),
+    ].join("\n");
+    navigator.clipboard?.writeText(text);
+  }
+
+  // 文案可手动编辑：直接在 productPlan 上更新，后续图片生成/落库均使用修改后的内容
+  function updatePlanField(key: string, value: Json) {
+    setProductPlan((prev) => {
+      if (!prev || typeof prev !== "object" || Array.isArray(prev)) return prev;
+      return { ...(prev as Record<string, Json>), [key]: value };
+    });
+  }
+  function updatePlanPlatform(pk: string, value: string) {
+    setProductPlan((prev) => {
+      if (!prev || typeof prev !== "object" || Array.isArray(prev)) return prev;
+      const obj = prev as Record<string, Json>;
+      const copies = asMap(field(obj, "platform_copies"));
+      return { ...obj, platform_copies: { ...copies, [pk]: value } };
+    });
+  }
+
+  const stepState = (i: number): "done" | "active" | "todo" => {
+    const activeIdx = { select: 0, upload: 1, image: 2, copy: 3, done: 4 }[phase];
+    if (i < activeIdx) return "done";
+    if (i === activeIdx) return "active";
+    return "todo";
+  };
 
   return (
     <section>
-      <h2>新品上架（线1流水线）</h2>
-      <p className="muted">
-        第一步：输入你的想法 → 文案 Agent 生成 → 你审批 → 图片 Agent 生成 → 你审批 → 完成上架。
-      </p>
+      <PageHeader
+        title="新品上架"
+        subtitle="勾选已有商品 → 上传参考图（可选）→ 生成图片 → 你审批 → 生成文案 → 你审批 → 落库上架。可多选，逐个处理，每步均可返回上一步。"
+      />
+      {error && <div className="notice notice-error">出错：{error}</div>}
 
-      <ol className="step-bar">
-        <li className={step >= 0 ? "active" : ""}>1 输入想法</li>
-        <li className={step >= 1 ? "active" : ""}>2 文案审批</li>
-        <li className={step >= 2 ? "active" : ""}>3 图片审批</li>
-        <li className={step >= 3 ? "active" : ""}>4 完成上架</li>
-      </ol>
+      <ul className="stepper">
+        {STEP_LABELS.map((label, i) => (
+          <li key={label} className={stepState(i)}>
+            <span className="step-node">{stepState(i) === "done" ? "✓" : i + 1}</span>
+            <span className="step-label">{label}</span>
+            {i < STEP_LABELS.length - 1 && <span className="step-line" />}
+          </li>
+        ))}
+      </ul>
 
-      {error && <p className="error">出错：{error}</p>}
+      {/* Step 0: 勾选商品 + 选平台 */}
+      {phase === "select" && (
+        <div className="card listing-review">
+          <div className="review-highlight" style={{ marginBottom: 16 }}>
+            <h4>目标平台（多选）</h4>
+            <div className="check-list">
+              {PLATFORMS.map((p) => (
+                <label key={p.key} className={`check-item ${platforms.includes(p.key) ? "checked" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={platforms.includes(p.key)}
+                    disabled={!p.enabled}
+                    onChange={() => togglePlatform(p.key)}
+                  />
+                  <span>{p.label}</span>
+                  {!p.enabled && <span className="ci-meta">（即将上线）</span>}
+                </label>
+              ))}
+            </div>
+          </div>
 
-      {/* Step 0: 自由输入 */}
-      {step === 0 && (
-        <div className="listing-form">
-          <label>
-            商品名称 *
-            <input value={idea.name} onChange={(e) => setField("name", e.target.value)} placeholder="如：便携保温杯" />
-          </label>
-          <label>
-            类目 *
-            <input value={idea.category} onChange={(e) => setField("category", e.target.value)} placeholder="如：家居/水杯" />
-          </label>
-          <label>
-            功能/卖点描述 *
-            <textarea
-              rows={4}
-              value={idea.description}
-              onChange={(e) => setField("description", e.target.value)}
-              placeholder="描述你想卖的东西、它的功能、材质、适用人群等"
-            />
-          </label>
-          <label>
-            目标用户（可选）
-            <input value={idea.targetAudience ?? ""} onChange={(e) => setField("targetAudience", e.target.value)} placeholder="如：上班族、学生" />
-          </label>
-          <label>
-            使用场景（可选）
-            <input value={idea.usageScenario ?? ""} onChange={(e) => setField("usageScenario", e.target.value)} placeholder="如：通勤、办公室、户外" />
-          </label>
-          <button
-            onClick={handleGenerateCopy}
-            disabled={busy || !idea.name || !idea.category || !idea.description}
-          >
-            {busy ? "生成中…" : "生成商品文案"}
-          </button>
+          <h4 style={{ margin: "0 0 10px" }}>勾选要上架的商品</h4>
+          {products.length === 0 ? (
+            <p className="muted">还没有商品，请先到「商品」页创建。</p>
+          ) : (
+            <div className="check-list">
+              {products.map((p) => (
+                <label key={p.id} className={`check-item ${selected.includes(p.id) ? "checked" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(p.id)}
+                    onChange={() => toggleProduct(p.id)}
+                  />
+                  <span>
+                    {p.id} {p.name}
+                  </span>
+                  <span className="ci-meta">· {p.category}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className="export-actions">
+            <button
+              className="btn btn-primary"
+              onClick={() => startProduct(0)}
+              disabled={busy || selectedProducts.length === 0 || platforms.length === 0}
+            >
+              {busy ? "生成中…" : `开始生成（${selectedProducts.length} 个）`}
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Step 1: 文案审批 */}
-      {step === 1 && productPlan && (
-        <div className="listing-review">
-          <h3>商品文案（待你审批）</h3>
+      {/* Step 3: 文案审批 */}
+      {phase === "copy" && productPlan && (
+        <div className="card listing-review">
+          <h3 style={{ marginTop: 0 }}>
+            商品文案（待审 · {index + 1}/{selectedProducts.length}：{current.name}）
+          </h3>
           <div className="review-highlight">
-            <p><b>建议标题：</b>{asString(field(productPlan, "recommended_title"))}</p>
-            <p><b>详情：</b>{asString(field(productPlan, "detail_description"))}</p>
-            <p><b>卖点：</b>{asList(field(productPlan, "selling_points")).join("、")}</p>
-            <p><b>SEO 词：</b>{asList(field(productPlan, "seo_keywords")).join("、")}</p>
-            {Object.keys(platformCopies).length > 0 && (
-              <div>
-                <b>各平台文案：</b>
-                {Object.entries(platformCopies).map(([k, v]) => (
-                  <p key={k} className="muted">· {k}：{asString(v)}</p>
-                ))}
+            <p className="muted" style={{ marginTop: 0 }}>
+              图片已先行生成并审批。可直接修改下方文案，确认后以你修改后的内容落库
+              （如想按新文案重出图，可返回上一步重新生成）。
+            </p>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <span>建议标题</span>
+              <input
+                value={asString(field(productPlan, "recommended_title"))}
+                onChange={(e) => updatePlanField("recommended_title", e.target.value)}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <span>详情描述</span>
+              <textarea
+                rows={3}
+                value={asString(field(productPlan, "detail_description"))}
+                onChange={(e) => updatePlanField("detail_description", e.target.value)}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <span>卖点（每行一条）</span>
+              <textarea
+                rows={3}
+                value={asList(field(productPlan, "selling_points")).join("\n")}
+                onChange={(e) => updatePlanField("selling_points", e.target.value.split("\n"))}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <span>SEO 词（每行一条）</span>
+              <textarea
+                rows={2}
+                value={asList(field(productPlan, "seo_keywords")).join("\n")}
+                onChange={(e) => updatePlanField("seo_keywords", e.target.value.split("\n"))}
+              />
+            </div>
+            {platforms.map((pk) => (
+              <div className="field" key={pk} style={{ marginBottom: 12 }}>
+                <span>{pk} 文案</span>
+                <textarea
+                  rows={2}
+                  value={asString(platformCopies[pk])}
+                  onChange={(e) => updatePlanPlatform(pk, e.target.value)}
+                />
               </div>
-            )}
+            ))}
           </div>
           <details>
             <summary>查看完整 JSON</summary>
             <JsonView data={productPlan} />
           </details>
-          <div className="confirm-actions">
-            <button onClick={handleGenerateImage} disabled={busy}>
-              {busy ? "生成中…" : "通过，生成图片创意"}
+          <div className="export-actions">
+            <button className="btn btn-primary" onClick={handleFinalize} disabled={busy}>
+              {busy ? "上架中…" : "通过，完成上架（落库）"}
             </button>
-            <button className="secondary" onClick={() => setStep(0)} disabled={busy}>
-              驳回，重新输入
+            <button className="btn btn-secondary" onClick={() => setPhase("image")} disabled={busy}>
+              返回上一步
+            </button>
+            <button className="btn btn-secondary" onClick={handleExport} disabled={!productPlan}>
+              导出文案
+            </button>
+            <button className="btn btn-secondary" onClick={() => setPhase("select")} disabled={busy}>
+              重新选择商品
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 1: 上传参考图（可选，图生图） */}
+      {phase === "upload" && (
+        <div className="card listing-review">
+          <h3 style={{ marginTop: 0 }}>
+            上传参考图（可选 · {index + 1}/{selectedProducts.length}：{current.name}）
+          </h3>
+          <p className="muted">
+            上传一张商品/风格参考图，点「用此图生成」走<strong>图生图</strong>（以参考图为基础生成商品图）；
+            不想用参考图就点「跳过，用文生图」。
+          </p>
+          <div className="field" style={{ marginBottom: 12 }}>
+            <span>参考图</span>
+            <input type="file" accept="image/*" onChange={onPickRef} />
+          </div>
+          {refImage && (
+            <div className="ref-preview">
+              <img className="generated-image" src={refImage} alt="参考图预览" />
+              <span className="ci-meta">{refName}</span>
+            </div>
+          )}
+          <div className="export-actions">
+            <button
+              className="btn btn-primary"
+              onClick={() => proceedToImages(refImage || undefined)}
+              disabled={busy || !refImage}
+            >
+              {busy ? "生成中…" : "用此图生成（图生图）"}
+            </button>
+            <button className="btn btn-secondary" onClick={() => proceedToImages()} disabled={busy}>
+              跳过，用文生图
+            </button>
+            <button className="btn btn-secondary" onClick={() => setPhase("select")} disabled={busy}>
+              返回上一步
             </button>
           </div>
         </div>
       )}
 
       {/* Step 2: 图片审批 */}
-      {step === 2 && imagePlan && (
-        <div className="listing-review">
-          <h3>图片创意（待你审批）</h3>
+      {phase === "image" && imagePlan && (
+        <div className="card listing-review">
+          <h3 style={{ marginTop: 0 }}>
+            图片创意（待审 · {index + 1}/{selectedProducts.length}：{current.name}）
+          </h3>
+          {/* 主图：真实生成图优先，否则占位说明 */}
+          <div className="image-preview">
+            {imgMain ? (
+              <img className="generated-image primary" src={imgMain} alt={`${current.name} 主图`} />
+            ) : (
+              <div className="image-preview-frame">
+                <div className="image-preview-style">{asString(field(imagePlan, "image_style"))}</div>
+                <div className="image-preview-name">{current.name}</div>
+                <div className="image-preview-note">未生成真实图（检查 DASHSCOPE_API_KEY / IMAGE_GEN_ENABLED）</div>
+              </div>
+            )}
+          </div>
+          <div className="prompt-cards">
+            <div className="prompt-card">
+              <span className="prompt-card-label">主图提示词</span>
+              <p>{asString(field(imagePlan, "main_image_prompt"))}</p>
+              {imgMain ? (
+                <img className="generated-image" src={imgMain} alt="主图" />
+              ) : (
+                <span className="ci-meta">（图未生成）</span>
+              )}
+            </div>
+            <div className="prompt-card">
+              <span className="prompt-card-label">场景图提示词</span>
+              <p>{asString(field(imagePlan, "scene_image_prompt"))}</p>
+              {imgScene ? (
+                <img className="generated-image" src={imgScene} alt="场景图" />
+              ) : (
+                <span className="ci-meta">（图未生成）</span>
+              )}
+            </div>
+            <div className="prompt-card">
+              <span className="prompt-card-label">营销图提示词</span>
+              <p>{asString(field(imagePlan, "marketing_image_prompt"))}</p>
+              {imgMarketing ? (
+                <img className="generated-image" src={imgMarketing} alt="营销图" />
+              ) : (
+                <span className="ci-meta">（图未生成）</span>
+              )}
+            </div>
+          </div>
           <div className="review-highlight">
-            <p><b>主图提示词：</b>{asString(field(imagePlan, "main_image_prompt"))}</p>
-            <p><b>场景图提示词：</b>{asString(field(imagePlan, "scene_image_prompt"))}</p>
-            <p><b>营销图提示词：</b>{asString(field(imagePlan, "marketing_image_prompt"))}</p>
-            <p><b>图片风格：</b>{asString(field(imagePlan, "image_style"))}</p>
-            <p><b>风险提示：</b>{asList(field(imagePlan, "image_risk_notes")).join("；")}</p>
+            <div className="review-grid">
+              <div className="review-item">
+                <div className="k">图片风格</div>
+                <div className="v">{asString(field(imagePlan, "image_style"))}</div>
+              </div>
+              <div className="review-item">
+                <div className="k">风险提示</div>
+                <div className="v">{asList(field(imagePlan, "image_risk_notes")).join("；")}</div>
+              </div>
+            </div>
           </div>
           <details>
             <summary>查看完整 JSON（含合规审核）</summary>
             <JsonView data={imagePlan} />
           </details>
-          <div className="confirm-actions">
-            <button onClick={handleFinalize} disabled={busy}>
-              {busy ? "上架中…" : "通过，完成上架"}
+          <div className="export-actions">
+            <button className="btn btn-primary" onClick={() => setPhase("copy")} disabled={busy}>
+              {busy ? "生成中…" : "通过，去文案审批"}
             </button>
-            <button className="secondary" onClick={() => setStep(1)} disabled={busy}>
-              驳回，回到文案
+            <button className="btn btn-secondary" onClick={() => setPhase("upload")} disabled={busy}>
+              返回上一步
             </button>
+            <button className="btn btn-secondary" onClick={handleExport} disabled={!productPlan}>
+              导出文案
+            </button>
+            <span className="muted">发布到小红书 · M3 待接入</span>
           </div>
         </div>
       )}
 
-      {/* Step 3: 完成 */}
-      {step === 3 && (
-        <div className="listing-review">
-          <h3>上架完成 ✅</h3>
-          <p>商品与运营计划已落库，正在跳转到计划详情…</p>
+      {/* Step 4: 完成 */}
+      {phase === "done" && (
+        <div className="card listing-review">
+          <h3 style={{ marginTop: 0 }}>上架完成 ✅</h3>
+          <p>已处理 {results.length} 个商品，运营计划已落库：</p>
+          <ul className="check-list">
+            {results.map((r) => (
+              <li key={r.productId} className="check-item">
+                <span>#{r.productId} → 计划 {r.operationPlanId ?? "（落库失败）"}</span>
+                {r.operationPlanId != null && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => navigate(`/operation-plans/${r.operationPlanId}`)}
+                  >
+                    查看
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="export-actions">
+            <button className="btn btn-primary" onClick={() => navigate("/operation-plans")}>
+              去运营计划列表
+            </button>
+          </div>
         </div>
       )}
     </section>

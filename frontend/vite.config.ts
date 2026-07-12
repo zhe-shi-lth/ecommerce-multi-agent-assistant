@@ -18,6 +18,9 @@ export default defineConfig({
       "/agent": {
         target: "http://localhost:8011",
         changeOrigin: true,
+        // 文生图（万相）单步可能耗时数十秒，放宽容忍避免代理提前断连。
+        timeout: 300000,
+        proxyTimeout: 300000,
       },
     },
   },

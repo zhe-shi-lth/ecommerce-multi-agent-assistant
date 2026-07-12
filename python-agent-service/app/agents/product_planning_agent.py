@@ -2,14 +2,22 @@ from app.llm import client as llm_client
 from app.schemas.agent_outputs import ProductPlan
 from app.schemas.product import ProductContext
 
+# 平台键 -> 中文名（用于拼装 prompt / 规则文案）
+_PLATFORM_LABELS = {
+    "taobao": "淘宝",
+    "douyin": "抖音",
+    "xiaohongshu": "小红书",
+}
+_ALL_PLATFORMS = list(_PLATFORM_LABELS.keys())
+
 _SYSTEM_PROMPT = (
     "你是一名电商超级个体的商品运营规划专家。"
     "根据商品上下文，输出商品标题、卖点、详情描述、目标用户小结、上架建议，"
     "以及面向搜索与多平台的运营内容：\n"
     "- seo_keywords：可被搜索引擎收录的核心关键词列表（3-6 个）。\n"
     "- meta_description：用于搜索结果/详情页摘要的精简描述（30-80 字）。\n"
-    "- platform_copies：分别给出淘宝、抖音、小红书三个平台的适配文案"
-    "（键为 taobao / douyin / xiaohongshu），突出各平台调性（淘宝重转化、抖音重短视频种草、小红书重笔记种草）。\n"
+    "- platform_copies：分别给出 {platform_names} 的适配文案"
+    "（键为 {platform_keys}），突出各平台调性（淘宝重转化、抖音重短视频种草、小红书重笔记种草）。\n"
     "使用简体中文，内容具体、可执行，不要编造与上下文无关的信息。"
 )
 
@@ -20,11 +28,24 @@ _KNOWLEDGE_APPEND = (
 )
 
 
+def _resolve_platforms(selected: list[str] | None) -> list[str]:
+    """选中平台为空/None 时，默认覆盖全部三平台。"""
+    if not selected:
+        return _ALL_PLATFORMS
+    return [p for p in selected if p in _PLATFORM_LABELS]
+
+
 class ProductPlanningAgent:
-    def run(self, product: ProductContext, knowledge: str = "") -> ProductPlan:
+    def run(
+        self,
+        product: ProductContext,
+        knowledge: str = "",
+        selected_platforms: list[str] | None = None,
+    ) -> ProductPlan:
+        platforms = _resolve_platforms(selected_platforms)
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(product, knowledge)
+            return self._rule_based_run(product, knowledge, platforms)
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -32,9 +53,41 @@ class ProductPlanningAgent:
         )
         if knowledge:
             user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
-        return client.generate(_SYSTEM_PROMPT, user_prompt, ProductPlan)
+        prompt = _SYSTEM_PROMPT.format(
+            platform_names="、".join(_PLATFORM_LABELS[p] for p in platforms),
+            platform_keys="/".join(platforms),
+        )
+        plan = client.generate(prompt, user_prompt, ProductPlan)
+        # 归一化平台键：LLM 偶发把 taobao 写成 timaobao，必须落回规范键，否则前端按键取不到
+        plan = plan.model_copy(
+            update={
+                "platform_copies": self._normalize_platform_copies(
+                    plan.platform_copies, product, platforms
+                )
+            }
+        )
+        return plan
 
-    def _rule_based_run(self, product: ProductContext, knowledge: str = "") -> ProductPlan:
+    @staticmethod
+    def _normalize_platform_copies(raw: dict, product: ProductContext, platforms: list[str]) -> dict:
+        """把 LLM 偶发的平台键错别字（如 timaobao）归一为规范键 taobao/douyin/xiaohongshu。"""
+        result: dict[str, str] = {}
+        for p in platforms:
+            if raw.get(p):
+                result[p] = raw[p]
+                continue
+            # 模糊匹配：规范键是 LLM 键的子串（timaobao 含 taobao）
+            hit = next((v for k, v in raw.items() if p in k.lower()), None)
+            result[p] = hit or f"{product.name}（{_PLATFORM_LABELS.get(p, p)} 文案待补充）"
+        return result
+
+    def _rule_based_run(
+        self,
+        product: ProductContext,
+        knowledge: str = "",
+        platforms: list[str] | None = None,
+    ) -> ProductPlan:
+        platforms = _resolve_platforms(platforms)
         audience = product.target_audience or "目标用户"
         scenario = product.usage_scenario or "日常使用场景"
         selling_points = [
@@ -52,11 +105,13 @@ class ProductPlanningAgent:
             f"{product.name}：{product.description}，适合{audience}在{scenario}中使用，"
             f"主打{selling_points[0]}。"
         )
-        platform_copies = {
+
+        _RULE_COPY = {
             "taobao": f"【{product.name}】{scenario}必备，{selling_points[0]}，限时优惠。",
             "douyin": f"短视频种草｜{product.name}：{scenario}里的小确幸，{selling_points[1]}。",
             "xiaohongshu": f"笔记分享｜入手{product.name}后，{scenario}幸福感拉满，{selling_points[2]}。",
         }
+        platform_copies = {p: _RULE_COPY[p] for p in platforms}
 
         # 规则路径也采纳知识库：补充 SEO 词 + 提示规避违禁词
         if knowledge:

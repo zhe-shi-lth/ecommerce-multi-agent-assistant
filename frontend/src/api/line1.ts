@@ -1,25 +1,25 @@
 import { agentApi } from "./client";
 import type { Json } from "./types";
 
-export interface NewProductIdea {
-  name: string;
-  category: string;
-  description: string;
-  targetAudience?: string;
-  usageScenario?: string;
-}
+// 线1上架（目录优先）：勾选已有商品 + 选中平台，逐商品走 文案→图片→审批→落库。
+export const generateProductPlan = (body: { product_id: number; platforms: string[] }) =>
+  agentApi.post<Json>("/ecommerce/line1/product-plan", body);
 
-// 线1上架：把用户想法交给商品规划 Agent，返回结构化文案
-export const generateProductPlan = (idea: NewProductIdea) =>
-  agentApi.post<Json>("/ecommerce/line1/product-plan", idea);
+export const generateImagePlan = (body: {
+  product_id: number;
+  platforms: string[];
+  product_plan: Json;
+  reference_image?: string;
+}) => agentApi.post<Json>("/ecommerce/line1/image-plan", body);
 
-// 线1上架：基于想法+文案，生成图片创意方案
-export const generateImagePlan = (idea: NewProductIdea, productPlan: Json) =>
-  agentApi.post<Json>("/ecommerce/line1/image-plan", { idea, product_plan: productPlan });
-
-// 线1上架：落库（先建商品，再建运营计划），返回新建 id
-export const finalizeListing = (idea: NewProductIdea, productPlan: Json, imagePlan: Json) =>
+// 落库（建运营计划挂到已有商品）。真实"发布到小红书"由 M3 接入。
+export const finalizeListing = (body: {
+  product_id: number;
+  platforms: string[];
+  product_plan: Json;
+  image_plan: Json;
+}) =>
   agentApi.post<{ ok: boolean; productId: number | null; operationPlanId: number | null }>(
     "/ecommerce/line1/finalize",
-    { idea, product_plan: productPlan, image_plan: imagePlan },
+    body,
   );

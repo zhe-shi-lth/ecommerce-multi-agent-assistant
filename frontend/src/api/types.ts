@@ -35,6 +35,12 @@ export interface AgentRun {
   finishedAt: string | null;
 }
 
+export interface Category {
+  id: number;
+  name: string;
+  createdAt: string;
+}
+
 export interface Product {
   id: number;
   name: string;

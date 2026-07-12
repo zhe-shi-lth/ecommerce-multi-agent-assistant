@@ -12,34 +12,47 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <h1 className="brand">电商多 Agent</h1>
+        <h1 className="brand">
+          <span className="brand-mark">电</span>
+          <span>电商多 Agent</span>
+        </h1>
         <nav>
-          <NavLink to="/operation-plans" className="nav-link">
-            运营计划
-          </NavLink>
+          <div className="nav-group">流程</div>
           <NavLink to="/new-listing" className="nav-link">
+            <span className="nav-dot" />
             新品上架
           </NavLink>
+          <NavLink to="/operation-plans" className="nav-link">
+            <span className="nav-dot" />
+            运营计划
+          </NavLink>
+          <div className="nav-group">数据</div>
           <NavLink to="/products" className="nav-link">
+            <span className="nav-dot" />
             商品
           </NavLink>
           <NavLink to="/inventories" className="nav-link">
+            <span className="nav-dot" />
             库存
           </NavLink>
           <NavLink to="/orders" className="nav-link">
+            <span className="nav-dot" />
             订单
           </NavLink>
-          <NavLink to="/favorites" className="nav-link">
-            收藏夹
-          </NavLink>
           <NavLink to="/dashboard" className="nav-link">
+            <span className="nav-dot" />
             销售监控
+          </NavLink>
+          <div className="nav-group">结果</div>
+          <NavLink to="/favorites" className="nav-link">
+            <span className="nav-dot" />
+            收藏夹
           </NavLink>
         </nav>
       </aside>
       <main className="content">
         <Routes>
-          <Route path="/" element={<OperationPlans />} />
+          <Route path="/" element={<NewListing />} />
           <Route path="/operation-plans" element={<OperationPlans />} />
           <Route path="/operation-plans/:id" element={<OperationPlanDetail />} />
           <Route path="/new-listing" element={<NewListing />} />

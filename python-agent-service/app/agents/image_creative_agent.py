@@ -1,3 +1,7 @@
+import os
+
+from dotenv import load_dotenv
+
 from app import config
 from app.llm import client as llm_client
 from app.schemas.agent_outputs import ImagePlan, ImageReviewResult, ProductPlan
@@ -38,10 +42,16 @@ def _build_knowledge_block(knowledge: str, template: str) -> str:
 
 
 class ImageCreativeAgent:
-    def run(self, product: ProductContext, product_plan: ProductPlan, knowledge: str = "") -> ImagePlan:
+    def run(
+        self,
+        product: ProductContext,
+        product_plan: ProductPlan,
+        knowledge: str = "",
+        reference_image: str | None = None,
+    ) -> ImagePlan:
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(product, product_plan, knowledge)
+            return self._rule_based_run(product, product_plan, knowledge, reference_image)
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -53,9 +63,16 @@ class ImageCreativeAgent:
             user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
         image_plan = client.generate(_SYSTEM_PROMPT, user_prompt, ImagePlan)
         review = self._review_with_llm(client, product, image_plan, knowledge)
-        return image_plan.model_copy(update={"image_review_result": review})
+        image_plan = image_plan.model_copy(update={"image_review_result": review})
+        return self._attach_generated_images(image_plan, reference_image)
 
-    def _rule_based_run(self, product: ProductContext, product_plan: ProductPlan, knowledge: str = "") -> ImagePlan:
+    def _rule_based_run(
+        self,
+        product: ProductContext,
+        product_plan: ProductPlan,
+        knowledge: str = "",
+        reference_image: str | None = None,
+    ) -> ImagePlan:
         selling_points = "、".join(product_plan.selling_points)
         scenario = product.usage_scenario or "日常使用场景"
 
@@ -71,7 +88,64 @@ class ImageCreativeAgent:
             image_risk_notes=risk_notes,
         )
         review = self._review_rule_based(image_plan, knowledge)
-        return image_plan.model_copy(update={"image_review_result": review})
+        image_plan = image_plan.model_copy(update={"image_review_result": review})
+        return self._attach_generated_images(image_plan, reference_image)
+
+    def _attach_generated_images(
+        self, image_plan: ImagePlan, reference_image: str | None = None
+    ) -> ImagePlan:
+        """为三张提示词生成真实图片并回填 URL。
+
+        - 有 reference_image（用户上传的参考图）→ 走图生图（wan2.7-image），以该图作为三张图的参考；
+        - 无 reference_image → 走文生图（wanx-v1）。
+
+        逐张顺序生成（万相 SDK 并发调用不稳定，易触发限流/偶发失败），每张失败重试 1 次；
+        任一张失败仅该张回退占位，不阻断整体图片创意与后续上架。
+        """
+        # 请求时重新读取开关（fastapi reload 不监听 .env，避免启动期默认值被固化）。
+        load_dotenv(override=True)
+        enabled = config._as_bool(os.getenv("IMAGE_GEN_ENABLED"), config.IMAGE_GEN_ENABLED)
+        if not enabled:
+            return image_plan
+        try:
+            from app.tools.dashscope_image import generate_image, generate_image_from_reference
+        except Exception as e:  # noqa: BLE001
+            print(f"[image] 文生图不可用，降级占位：{e}")
+            return image_plan
+
+        mapping = {
+            "main_image_url": image_plan.main_image_prompt,
+            "scene_image_url": image_plan.scene_image_prompt,
+            "marketing_image_url": image_plan.marketing_image_prompt,
+        }
+        urls: dict[str, str | None] = {}
+        for key, prompt in mapping.items():
+            if reference_image:
+                urls[key] = self._generate_one(
+                    generate_image_from_reference, reference_image, prompt
+                )
+            else:
+                urls[key] = self._generate_one(generate_image, prompt)
+        return image_plan.model_copy(update=urls)
+
+    @staticmethod
+    def _generate_one(callable_fn, *args, retries: int = 1) -> str | None:
+        delay = 2.0
+        for attempt in range(retries + 1):
+            try:
+                result = callable_fn(*args)
+                return result[0] if result else None
+            except Exception as e:  # noqa: BLE001
+                if attempt < retries:
+                    print(f"[image] 单图生成重试（第{attempt + 1}次）：{e}")
+                    import time
+
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    print(f"[image] 单图生成失败，跳过：{e}")
+                    return None
+        return None
 
     def _review_with_llm(
         self, client, product: ProductContext, image_plan: ImagePlan, knowledge: str = ""

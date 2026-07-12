@@ -73,12 +73,20 @@ public class InventoryController {
 
     private void apply(InventoryCreateRequest request, Product product, Inventory inventory) {
         inventory.setProduct(product);
-        inventory.setCurrentStock(request.currentStock());
-        inventory.setReservedStock(request.reservedStock());
-        inventory.setSafeStockThreshold(request.safeStockThreshold());
-        inventory.setPurchaseCycleDays(request.purchaseCycleDays());
-        inventory.setSalesLast7Days(request.salesLast7Days());
-        inventory.setInventoryStatus(request.inventoryStatus());
+        // 前端建库存只需商品/当前库存/安全阈值，其余字段缺省兜底，避免 NOT NULL 约束 500
+        int currentStock = request.currentStock() != null ? request.currentStock() : 0;
+        int safeThreshold = request.safeStockThreshold() != null ? request.safeStockThreshold() : 0;
+        inventory.setCurrentStock(currentStock);
+        inventory.setReservedStock(request.reservedStock() != null ? request.reservedStock() : 0);
+        inventory.setSafeStockThreshold(safeThreshold);
+        inventory.setPurchaseCycleDays(request.purchaseCycleDays() != null ? request.purchaseCycleDays() : 0);
+        inventory.setSalesLast7Days(request.salesLast7Days() != null ? request.salesLast7Days() : 0);
+        // 状态未传则按 当前库存 < 安全阈值 推导 RISK / ENOUGH（须符合 ck_inventories_status 约束）
+        String status = request.inventoryStatus();
+        if (status == null || status.isBlank()) {
+            status = currentStock < safeThreshold ? "RISK" : "ENOUGH";
+        }
+        inventory.setInventoryStatus(status);
     }
 
     private Product findProduct(Long id) {

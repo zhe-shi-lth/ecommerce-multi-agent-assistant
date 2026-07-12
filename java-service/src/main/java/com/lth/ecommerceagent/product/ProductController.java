@@ -62,9 +62,10 @@ public class ProductController {
         product.setDescription(request.description());
         product.setCostPrice(request.costPrice());
         product.setSalePrice(request.salePrice());
-        product.setTargetAudience(request.targetAudience());
-        product.setUsageScenario(request.usageScenario());
-        product.setStatus(request.status());
+        // 前端建商品无需关心状态/人群/场景，缺省兜底，避免 NOT NULL 约束 500
+        product.setTargetAudience(request.targetAudience() != null ? request.targetAudience() : "");
+        product.setUsageScenario(request.usageScenario() != null ? request.usageScenario() : "");
+        product.setStatus(request.status() != null ? request.status() : "DRAFT");
     }
 
     private Product findProduct(Long id) {

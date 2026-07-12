@@ -15,6 +15,7 @@ dependencies = [
     "loguru>=0.7.0",
     "pydantic>=2.8.0",
     "python-dotenv>=1.0.0",
+    "dashscope>=1.26.0",  # 通义万相文生图（wanx-v1），百炼平台需走官方 SDK
 ]
 
 [dependency-groups]

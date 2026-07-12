@@ -5,6 +5,7 @@ import { getAgentRunsByPlan } from "../api/agents";
 import type { AgentRun, Json, OperationPlan } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import JsonView from "../components/JsonView";
+import PageHeader from "../components/PageHeader";
 
 interface PlanBlock {
   title: string;
@@ -35,9 +36,15 @@ export default function OperationPlanDetail() {
       .finally(() => setLoading(false));
   }, [planId]);
 
-  if (loading) return <p className="muted">加载中…</p>;
-  if (error) return <p className="error">加载失败：{error}</p>;
-  if (!plan) return <p className="muted">未找到计划 {planId}</p>;
+  if (loading)
+    return (
+      <div className="loading">
+        <span className="spinner" />
+        加载中…
+      </div>
+    );
+  if (error) return <div className="notice notice-error">加载失败：{error}</div>;
+  if (!plan) return <div className="notice">未找到计划 {planId}</div>;
 
   const confirmationStatus = plan.confirmationStatus ?? "PENDING";
   const pending = confirmationStatus === "PENDING";
@@ -100,65 +107,75 @@ export default function OperationPlanDetail() {
 
   return (
     <section>
-      <h2>运营计划 #{plan.id}</h2>
+      <PageHeader
+        title={`运营计划 #${plan.id}`}
+        subtitle={`Trace ${plan.traceId}`}
+      />
       <div className="meta">
-        <span>Trace: <span className="mono">{plan.traceId}</span></span>
         <span>状态: <StatusBadge status={plan.status} /></span>
         <span>确认状态: <StatusBadge status={confirmationStatus} /></span>
         <span>需人工审核: {plan.manualReviewRequired ? "是" : "否"}</span>
       </div>
 
-      <div className="confirm-actions">
-        {pending ? (
-          <>
-            <button onClick={() => handleDecision("confirm")} disabled={acting}>
-              {acting ? "处理中…" : "确认计划"}
-            </button>
-            <button onClick={() => handleDecision("reject")} disabled={acting}>
-              {acting ? "处理中…" : "驳回计划"}
-            </button>
-          </>
-        ) : (
-          <p className="muted">
-            已{confirmationStatus === "CONFIRMED" ? "确认" : "驳回"}
-            {plan.confirmedAt ? `（${plan.confirmedAt}）` : ""}
-          </p>
-        )}
-        {actionError && <p className="error">操作失败：{actionError}</p>}
-      </div>
-
-      <div className="export-actions">
-        <span>导出到：</span>
-        <button onClick={() => handleExport("taobao")} disabled={exporting}>
-          淘宝
-        </button>
-        <button onClick={() => handleExport("douyin")} disabled={exporting}>
-          抖音
-        </button>
-        <button onClick={() => handleExport("xiaohongshu")} disabled={exporting}>
-          小红书
-        </button>
-        <button onClick={handleFavorite} disabled={exporting}>
-          收藏文案
-        </button>
-        {exporting && <span className="muted">生成中…</span>}
-        {favSaved && <span className="muted">已收藏</span>}
-        {exportError && <p className="error">导出失败：{exportError}</p>}
-      </div>
-      {exportContent && (
-        <div className="export-result">
-          <div className="export-result-head">
-            <span>已生成，可复制粘贴：</span>
-            <button onClick={copyExport}>复制</button>
-          </div>
-          <textarea readOnly value={exportContent} rows={10} />
+      <div className="card">
+        <div className="export-actions">
+          {pending ? (
+            <>
+              <button className="btn btn-primary" onClick={() => handleDecision("confirm")} disabled={acting}>
+                {acting ? "处理中…" : "确认计划"}
+              </button>
+              <button className="btn btn-secondary" onClick={() => handleDecision("reject")} disabled={acting}>
+                {acting ? "处理中…" : "驳回计划"}
+              </button>
+            </>
+          ) : (
+            <p className="muted">
+              已{confirmationStatus === "CONFIRMED" ? "确认" : "驳回"}
+              {plan.confirmedAt ? `（${plan.confirmedAt}）` : ""}
+            </p>
+          )}
+          {actionError && <span className="error">操作失败：{actionError}</span>}
         </div>
-      )}
 
-      <h3>总结</h3>
-      <p className="summary">{plan.finalSummary}</p>
+        <div className="export-actions">
+          <span className="muted">导出到：</span>
+          <button className="btn btn-secondary" onClick={() => handleExport("taobao")} disabled={exporting}>
+            淘宝
+          </button>
+          <button className="btn btn-secondary" onClick={() => handleExport("douyin")} disabled={exporting}>
+            抖音
+          </button>
+          <button className="btn btn-secondary" onClick={() => handleExport("xiaohongshu")} disabled={exporting}>
+            小红书
+          </button>
+          <button className="btn btn-secondary" onClick={handleFavorite} disabled={exporting}>
+            收藏文案
+          </button>
+          {exporting && <span className="muted">生成中…</span>}
+          {favSaved && <span className="muted">已收藏</span>}
+          {exportError && <span className="error">导出失败：{exportError}</span>}
+        </div>
+        {exportContent && (
+          <div className="export-result">
+            <div className="export-result-head">
+              <span>已生成，可复制粘贴：</span>
+              <button className="btn btn-secondary btn-sm" onClick={copyExport}>
+                复制
+              </button>
+            </div>
+            <textarea readOnly value={exportContent} rows={10} />
+          </div>
+        )}
+      </div>
 
-      <h3>各 Agent 产出</h3>
+      <div className="card">
+        <div className="card-header">
+          <h3>总结</h3>
+        </div>
+        <p style={{ margin: 0 }}>{plan.finalSummary}</p>
+      </div>
+
+      <h3 style={{ marginBottom: 12 }}>各 Agent 产出</h3>
       <div className="plan-blocks">
         {blocks.map((b) => (
           <div className="plan-block" key={b.title}>
@@ -168,16 +185,14 @@ export default function OperationPlanDetail() {
         ))}
       </div>
 
-      <h3>Agent 执行 Trace（{runs.length}）</h3>
+      <h3 style={{ margin: "20px 0 12px" }}>Agent 执行 Trace（{runs.length}）</h3>
       <div className="runs">
         {runs.map((r) => (
           <details className="run" key={r.id}>
             <summary>
               <StatusBadge status={r.status} />
               <span className="agent-name">{r.agentName}</span>
-              <span className="muted">
-                {r.durationMs !== null ? `${r.durationMs} ms` : "—"}
-              </span>
+              <span className="muted">{r.durationMs !== null ? `${r.durationMs} ms` : "—"}</span>
             </summary>
             {r.errorMessage && <p className="error">错误：{r.errorMessage}</p>}
             <div className="run-io">

@@ -51,6 +51,11 @@ RAG_CHUNK_OVERLAP = _as_int(os.getenv("RAG_CHUNK_OVERLAP"), 50)
 # 图片视觉审核（可选；复用本地 LLM 对图片创意方案做合规/质量审核）
 IMAGE_REVIEW_ENABLED = _as_bool(os.getenv("IMAGE_REVIEW_ENABLED"), default=True)
 
+# 通义万相（DashScope）文生图（可选；需 DASHSCOPE_API_KEY 且安装 dashscope SDK）
+# 关闭或失败则图片步骤只出提示词占位，不阻断上架链路。
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+IMAGE_GEN_ENABLED = _as_bool(os.getenv("IMAGE_GEN_ENABLED"), default=False)
+
 # 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
 BASE_DIR = Path(__file__).resolve().parents[1]
 RAG_KNOWLEDGE_PATH = (

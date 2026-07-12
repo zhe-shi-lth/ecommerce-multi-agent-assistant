@@ -131,6 +131,22 @@ class JavaApiClient:
             logger.error("线1 创建商品到 Java 失败: {}", e)
             return None
 
+    def get_product(self, product_id: int) -> Optional[dict]:
+        """线1上架（目录优先）：从 Java 拉取已存在的商品，喂给 Agent 生成文案/图片。
+
+        返回 Java ProductResponse 的 JSON（camelCase 键），失败返回 None。
+        """
+        url = f"{self.base_url}/api/products/{product_id}"
+        try:
+            resp = httpx.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info("从 Java 获取商品 (id={}, name={})", product_id, data.get("name"))
+            return data
+        except httpx.HTTPError as e:
+            logger.error("从 Java 获取商品失败 (id={}): {}", product_id, e)
+            return None
+
     def persist_line1_plan(
         self,
         product_id: int,

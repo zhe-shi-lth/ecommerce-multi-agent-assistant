@@ -29,6 +29,10 @@ class ImagePlan(BaseModel):
     image_style: str = Field(min_length=1)
     image_risk_notes: list[str]
     image_review_result: ImageReviewResult | None = None  # 视觉审核结果（可选）
+    # 真实文生图（通义万相 wanx-v1）生成的图片 URL；未启用/失败时为空（前端回退占位）。
+    main_image_url: str | None = None
+    scene_image_url: str | None = None
+    marketing_image_url: str | None = None
 
 
 class InventoryPlan(BaseModel):
