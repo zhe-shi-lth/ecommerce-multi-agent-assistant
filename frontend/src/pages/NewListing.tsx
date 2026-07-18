@@ -34,7 +34,7 @@ function asMap(v: Json | undefined): Record<string, Json> {
   return {};
 }
 
-const STEP_LABELS = ["选商品+平台", "上传参考图", "图片审批", "文案审批", "完成上架"];
+const STEP_LABELS = ["选商品+平台", "上传商品图+备注", "文案审批", "图片审批", "完成上架"];
 
 export default function NewListing() {
   const navigate = useNavigate();
@@ -62,12 +62,11 @@ export default function NewListing() {
   const current = selectedProducts[index];
   const platformCopies = productPlan ? asMap(field(productPlan, "platform_copies")) : {};
   const imgMain = imagePlan ? asString(field(imagePlan, "main_image_url")) : "";
-  const imgScene = imagePlan ? asString(field(imagePlan, "scene_image_url")) : "";
-  const imgMarketing = imagePlan ? asString(field(imagePlan, "marketing_image_url")) : "";
 
-  // 图生图：用户上传的参考图（base64 data URL），可选。
+  // 看图写文案：用户上传的商品图（base64 data URL）+ 商家备注，喂给视觉模型写文案。
   const [refImage, setRefImage] = useState<string | null>(null);
   const [refName, setRefName] = useState<string>("");
+  const [notes, setNotes] = useState<string>("");
 
   function toggleProduct(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -78,32 +77,50 @@ export default function NewListing() {
   }
 
   // 进入某个选中商品的处理流程：先到「上传参考图」步骤。
-  // 文案（productPlan）延后到生成图片时再按需生成——因为图生图/文生图依赖文案卖点。
+  // 文案（productPlan）在 upload 步骤由视觉模型看图/备注生成，图片则在 copy 步骤据文案生成。
   function startProduct(i: number) {
     setIndex(i);
     setProductPlan(null);
     setImagePlan(null);
     setRefImage(null);
     setRefName("");
+    setNotes("");
     setError(null);
     setPhase("upload");
   }
 
-  // 上传参考图后进入图片步骤：先确保文案已生成（图生成依赖文案卖点），再生成图片。
-  async function proceedToImages(referenceImage?: string) {
+  // 上传商品图+备注后生成文案（视觉模型看图/备注写文案），进入文案审批步骤。
+  async function generateCopy() {
     setBusy(true);
     setError(null);
     try {
-      let plan = productPlan;
-      if (!plan) {
-        plan = await generateProductPlan({ product_id: current.id, platforms });
-        setProductPlan(plan);
-      }
+      const plan = await generateProductPlan({
+        product_id: current.id,
+        platforms,
+        ...(refImage ? { reference_image: refImage } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+      });
+      setProductPlan(plan);
+      setPhase("copy");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 文案审批通过后，进入图片生成：传了商品图走图生图（照片为底图+文案为修改目标），
+  // 没传图走文生图（仅按文案）。
+  async function generateFinalImages() {
+    if (!productPlan) return;
+    setBusy(true);
+    setError(null);
+    try {
       const img = await generateImagePlan({
         product_id: current.id,
         platforms,
-        product_plan: plan,
-        ...(referenceImage ? { reference_image: referenceImage } : {}),
+        product_plan: productPlan,
+        ...(refImage ? { reference_image: refImage } : {}),
       });
       setImagePlan(img);
       setPhase("image");
@@ -189,7 +206,7 @@ export default function NewListing() {
   }
 
   const stepState = (i: number): "done" | "active" | "todo" => {
-    const activeIdx = { select: 0, upload: 1, image: 2, copy: 3, done: 4 }[phase];
+    const activeIdx = { select: 0, upload: 1, copy: 2, image: 3, done: 4 }[phase];
     if (i < activeIdx) return "done";
     if (i === activeIdx) return "active";
     return "todo";
@@ -199,7 +216,7 @@ export default function NewListing() {
     <section>
       <PageHeader
         title="新品上架"
-        subtitle="勾选已有商品 → 上传参考图（可选）→ 生成图片 → 你审批 → 生成文案 → 你审批 → 落库上架。可多选，逐个处理，每步均可返回上一步。"
+        subtitle="勾选已有商品 → 上传商品图+备注 → 看图/备注生成文案（可改）→ 据文案出图 → 你审批 → 落库上架。可多选，逐个处理，每步均可返回上一步。"
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
 
@@ -275,8 +292,8 @@ export default function NewListing() {
           </h3>
           <div className="review-highlight">
             <p className="muted" style={{ marginTop: 0 }}>
-              图片已先行生成并审批。可直接修改下方文案，确认后以你修改后的内容落库
-              （如想按新文案重出图，可返回上一步重新生成）。
+              文案已生成（看图/备注）。可直接修改下方文案，确认后据此出图；
+              如想换图或重新生成文案，可返回上一步。
             </p>
             <div className="field" style={{ marginBottom: 12 }}>
               <span>建议标题</span>
@@ -325,10 +342,10 @@ export default function NewListing() {
             <JsonView data={productPlan} />
           </details>
           <div className="export-actions">
-            <button className="btn btn-primary" onClick={handleFinalize} disabled={busy}>
-              {busy ? "上架中…" : "通过，完成上架（落库）"}
+            <button className="btn btn-primary" onClick={generateFinalImages} disabled={busy}>
+              {busy ? "生成中…" : "通过，去生成图片"}
             </button>
-            <button className="btn btn-secondary" onClick={() => setPhase("image")} disabled={busy}>
+            <button className="btn btn-secondary" onClick={() => setPhase("upload")} disabled={busy}>
               返回上一步
             </button>
             <button className="btn btn-secondary" onClick={handleExport} disabled={!productPlan}>
@@ -341,36 +358,46 @@ export default function NewListing() {
         </div>
       )}
 
-      {/* Step 1: 上传参考图（可选，图生图） */}
+      {/* Step 1: 上传商品图 + 备注（看图写文案） */}
       {phase === "upload" && (
         <div className="card listing-review">
           <h3 style={{ marginTop: 0 }}>
-            上传参考图（可选 · {index + 1}/{selectedProducts.length}：{current.name}）
+            上传商品图 + 备注（· {index + 1}/{selectedProducts.length}：{current.name}）
           </h3>
           <p className="muted">
-            上传一张商品/风格参考图，点「用此图生成」走<strong>图生图</strong>（以参考图为基础生成商品图）；
-            不想用参考图就点「跳过，用文生图」。
+            上传商品图后，视觉模型会<strong>看图 + 备注</strong>写出文案；且最终出图会以这张照片为
+            <strong>底图</strong>、按你修改后的文案做<strong>图生图</strong>精修。不上传图片则按文案
+            <strong>纯文生图</strong>。文案步骤仍可修改。
           </p>
           <div className="field" style={{ marginBottom: 12 }}>
-            <span>参考图</span>
+            <span>商品图（可选）</span>
             <input type="file" accept="image/*" onChange={onPickRef} />
           </div>
           {refImage && (
             <div className="ref-preview">
-              <img className="generated-image" src={refImage} alt="参考图预览" />
+              <img className="generated-image" src={refImage} alt="商品图预览" />
               <span className="ci-meta">{refName}</span>
             </div>
           )}
+          <div className="field" style={{ marginBottom: 12 }}>
+            <span>商家备注（可选，与商品已有描述合并）</span>
+            <textarea
+              rows={3}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="例如：主打纯棉、宽松家居风、适合夏天；想要日系小清新风格。"
+            />
+          </div>
           <div className="export-actions">
             <button
               className="btn btn-primary"
-              onClick={() => proceedToImages(refImage || undefined)}
+              onClick={generateCopy}
               disabled={busy || !refImage}
             >
-              {busy ? "生成中…" : "用此图生成（图生图）"}
+              {busy ? "生成中…" : "用此图生成文案"}
             </button>
-            <button className="btn btn-secondary" onClick={() => proceedToImages()} disabled={busy}>
-              跳过，用文生图
+            <button className="btn btn-secondary" onClick={generateCopy} disabled={busy}>
+              跳过图片，仅用备注/商品信息生成文案
             </button>
             <button className="btn btn-secondary" onClick={() => setPhase("select")} disabled={busy}>
               返回上一步
@@ -399,28 +426,10 @@ export default function NewListing() {
           </div>
           <div className="prompt-cards">
             <div className="prompt-card">
-              <span className="prompt-card-label">主图提示词</span>
+              <span className="prompt-card-label">主图提示词（本图即据此文案生成）</span>
               <p>{asString(field(imagePlan, "main_image_prompt"))}</p>
               {imgMain ? (
                 <img className="generated-image" src={imgMain} alt="主图" />
-              ) : (
-                <span className="ci-meta">（图未生成）</span>
-              )}
-            </div>
-            <div className="prompt-card">
-              <span className="prompt-card-label">场景图提示词</span>
-              <p>{asString(field(imagePlan, "scene_image_prompt"))}</p>
-              {imgScene ? (
-                <img className="generated-image" src={imgScene} alt="场景图" />
-              ) : (
-                <span className="ci-meta">（图未生成）</span>
-              )}
-            </div>
-            <div className="prompt-card">
-              <span className="prompt-card-label">营销图提示词</span>
-              <p>{asString(field(imagePlan, "marketing_image_prompt"))}</p>
-              {imgMarketing ? (
-                <img className="generated-image" src={imgMarketing} alt="营销图" />
               ) : (
                 <span className="ci-meta">（图未生成）</span>
               )}
@@ -443,11 +452,11 @@ export default function NewListing() {
             <JsonView data={imagePlan} />
           </details>
           <div className="export-actions">
-            <button className="btn btn-primary" onClick={() => setPhase("copy")} disabled={busy}>
-              {busy ? "生成中…" : "通过，去文案审批"}
+            <button className="btn btn-primary" onClick={handleFinalize} disabled={busy}>
+              {busy ? "上架中…" : "通过，完成上架（落库）"}
             </button>
-            <button className="btn btn-secondary" onClick={() => setPhase("upload")} disabled={busy}>
-              返回上一步
+            <button className="btn btn-secondary" onClick={() => setPhase("copy")} disabled={busy}>
+              返回上一步（改文案可重出图）
             </button>
             <button className="btn btn-secondary" onClick={handleExport} disabled={!productPlan}>
               导出文案

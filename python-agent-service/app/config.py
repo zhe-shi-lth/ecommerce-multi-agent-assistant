@@ -38,6 +38,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:latest")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "ollama")
 LLM_TEMPERATURE = _as_float(os.getenv("LLM_TEMPERATURE"), 0.3)
 LLM_TIMEOUT_MS = _as_int(os.getenv("LLM_TIMEOUT_MS"), 30000)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # RAG：本地向量知识库（可选；关闭或失败则链路退化为无知识库）
 RAG_ENABLED = _as_bool(os.getenv("RAG_ENABLED"), default=True)
@@ -55,6 +56,8 @@ IMAGE_REVIEW_ENABLED = _as_bool(os.getenv("IMAGE_REVIEW_ENABLED"), default=True)
 # 关闭或失败则图片步骤只出提示词占位，不阻断上架链路。
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 IMAGE_GEN_ENABLED = _as_bool(os.getenv("IMAGE_GEN_ENABLED"), default=False)
+# 通义千问视觉模型（看图写文案用），与文生图共用 DASHSCOPE_API_KEY
+DASHSCOPE_VL_MODEL = os.getenv("DASHSCOPE_VL_MODEL", "qwen-vl-max")
 
 # 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
 BASE_DIR = Path(__file__).resolve().parents[1]

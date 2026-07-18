@@ -24,5 +24,7 @@ export const agentApi = {
   get: <T>(path: string) => requestWithPrefix<T>("/agent", path),
   post: <T>(path: string, body?: unknown) =>
     requestWithPrefix<T>("/agent", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  put: <T>(path: string, body?: unknown) =>
+    requestWithPrefix<T>("/agent", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => requestWithPrefix<T>("/agent", path, { method: "DELETE" }),
 };

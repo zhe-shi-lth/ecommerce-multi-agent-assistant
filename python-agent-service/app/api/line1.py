@@ -22,17 +22,24 @@ router = APIRouter(prefix="/agent/ecommerce", tags=["line1-onboarding"])
 
 
 class Line1ProductRef(BaseModel):
-    """勾选的已有商品 + 选中的目标平台（如 ["xiaohongshu"]）。"""
+    """勾选的已有商品 + 选中的目标平台（如 ["xiaohongshu"]）。
+
+    reference_image：用户上传的商品图（base64 data URL），可选；提供则结合图片+备注写文案。
+    notes：商家备注（可选），与商品已有 description 合并作为写文案的额外信息。
+    """
 
     product_id: int
     platforms: list[str] = Field(default_factory=lambda: ["xiaohongshu"])
+    reference_image: str | None = None
+    notes: str = ""
 
 
 class Line1ImageRequest(BaseModel):
     product_id: int
     platforms: list[str] = Field(default_factory=lambda: ["xiaohongshu"])
     product_plan: ProductPlan
-    # 可选：用户上传的参考图（base64 data URL）。提供则走图生图，否则走文生图。
+    # 用户上传的商品图（base64 data URL）；提供则走图生图（照片为底图 + 文案为修改目标），
+    # 不提供则走文生图（仅按文案）。
     reference_image: str | None = None
 
 
@@ -69,10 +76,16 @@ def line1_product_plan(req: Line1ProductRef) -> ProductPlan:
     knowledge = get_knowledge_service().retrieve_for_product(product)
     agent = ProductPlanningAgent()
     try:
-        return agent.run(product, knowledge, selected_platforms=req.platforms)
+        return agent.run(
+            product,
+            knowledge,
+            selected_platforms=req.platforms,
+            reference_image=req.reference_image,
+            notes=req.notes,
+        )
     except Exception:  # noqa: BLE001
         # LLM 不可用/解析失败：降级规则实现，保证目录优先上架链路不 500
-        return agent._rule_based_run(product, knowledge, req.platforms)
+        return agent._rule_based_run(product, knowledge, req.platforms, notes=req.notes)
 
 
 @router.post("/line1/image-plan")
@@ -83,17 +96,10 @@ def line1_image_plan(req: Line1ImageRequest) -> ImagePlan:
     knowledge = get_knowledge_service().retrieve_for_product(product)
     agent = ImageCreativeAgent()
     try:
-        return agent.run(
-            product,
-            req.product_plan,
-            knowledge,
-            reference_image=req.reference_image,
-        )
+        return agent.run(product, req.product_plan, knowledge, req.platforms, req.reference_image)
     except Exception:  # noqa: BLE001
         # LLM 不可用/解析失败：降级规则实现，保证目录优先上架链路不 500
-        return agent._rule_based_run(
-            product, req.product_plan, knowledge, reference_image=req.reference_image
-        )
+        return agent._rule_based_run(product, req.product_plan, knowledge, req.platforms, req.reference_image)
 
 
 @router.post("/line1/finalize")

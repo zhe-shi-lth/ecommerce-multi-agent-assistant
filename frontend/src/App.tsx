@@ -7,6 +7,7 @@ import Orders from "./pages/Orders";
 import Favorites from "./pages/Favorites";
 import Dashboard from "./pages/Dashboard";
 import NewListing from "./pages/NewListing";
+import Settings from "./pages/Settings";
 
 export default function App() {
   return (
@@ -48,6 +49,11 @@ export default function App() {
             <span className="nav-dot" />
             收藏夹
           </NavLink>
+          <div className="nav-group">配置</div>
+          <NavLink to="/settings" className="nav-link">
+            <span className="nav-dot" />
+            设置中心
+          </NavLink>
         </nav>
       </aside>
       <main className="content">
@@ -61,6 +67,7 @@ export default function App() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/favorites" element={<Favorites />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
     </div>

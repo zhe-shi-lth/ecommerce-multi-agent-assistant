@@ -4,4 +4,6 @@ __pycache__/
 .venv/
 *.py[cod]
 .env
+python-agent-service/settings.json
+data/settings.json
 java-service/target/

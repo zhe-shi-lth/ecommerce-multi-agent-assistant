@@ -1,4 +1,10 @@
+import json
+import os
+import re
+
+from app import config
 from app.llm import client as llm_client
+from app.settings_store import get_settings
 from app.schemas.agent_outputs import ProductPlan
 from app.schemas.product import ProductContext
 
@@ -28,6 +34,16 @@ _KNOWLEDGE_APPEND = (
 )
 
 
+def _extract_json(text: str) -> dict:
+    """从视觉模型回复中截取第一个 JSON 对象（兼容 ```json 围栏）。解析失败抛异常。"""
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("视觉模型回复中未找到 JSON 对象")
+    return json.loads(cleaned[start : end + 1])
+
+
 def _resolve_platforms(selected: list[str] | None) -> list[str]:
     """选中平台为空/None 时，默认覆盖全部三平台。"""
     if not selected:
@@ -41,16 +57,27 @@ class ProductPlanningAgent:
         product: ProductContext,
         knowledge: str = "",
         selected_platforms: list[str] | None = None,
+        reference_image: str | None = None,
+        notes: str = "",
     ) -> ProductPlan:
         platforms = _resolve_platforms(selected_platforms)
+        # 有上传商品图且已配置 DashScope key → 走视觉模型「看图 + 备注」写文案
+        if reference_image and (os.getenv("DASHSCOPE_API_KEY") or config.DASHSCOPE_API_KEY):
+            try:
+                return self._vision_run(product, knowledge, platforms, reference_image, notes)
+            except Exception as e:  # noqa: BLE001
+                print(f"[plan] 视觉看图写文案失败，降级规则实现：{e}")
+                return self._rule_based_run(product, knowledge, platforms, notes)
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(product, knowledge, platforms)
+            return self._rule_based_run(product, knowledge, platforms, notes)
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
             "请按 ProductPlan 的结构化字段输出，包含 seo_keywords、meta_description、platform_copies。"
         )
+        if notes:
+            user_prompt += f"\n\n【商家备注】\n{notes}\n请结合备注中的额外信息撰写文案。"
         if knowledge:
             user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
         prompt = _SYSTEM_PROMPT.format(
@@ -59,6 +86,45 @@ class ProductPlanningAgent:
         )
         plan = client.generate(prompt, user_prompt, ProductPlan)
         # 归一化平台键：LLM 偶发把 taobao 写成 timaobao，必须落回规范键，否则前端按键取不到
+        plan = plan.model_copy(
+            update={
+                "platform_copies": self._normalize_platform_copies(
+                    plan.platform_copies, product, platforms
+                )
+            }
+        )
+        return plan
+
+    def _vision_run(
+        self,
+        product: ProductContext,
+        knowledge: str,
+        platforms: list[str],
+        reference_image: str,
+        notes: str,
+    ) -> ProductPlan:
+        """多模态路径：把商品图 + 商品上下文 + 商家备注发给通义千问视觉模型写文案。"""
+        from app.tools.dashscope_vl import vl_chat
+
+        prompt = _SYSTEM_PROMPT.format(
+            platform_names="、".join(_PLATFORM_LABELS[p] for p in platforms),
+            platform_keys="/".join(platforms),
+        )
+        user = (
+            "商品上下文（JSON）：\n"
+            f"{product.model_dump_json(indent=2)}\n\n"
+            f"请只看这张商品图，结合上述商品信息，按 ProductPlan 的结构化字段输出，"
+            f"包含 seo_keywords、meta_description、platform_copies（键为 {'/'.join(platforms)}）。"
+            "只输出 JSON，不要任何解释文字。"
+        )
+        if notes:
+            user += f"\n\n【商家备注】\n{notes}\n请结合备注中的额外信息撰写文案。"
+        if knowledge:
+            user += _KNOWLEDGE_APPEND.format(knowledge)
+        vision_model = get_settings().get("vision", {}).get("model")
+        raw = vl_chat(prompt, user, reference_image, model=vision_model)
+        data = _extract_json(raw)
+        plan = ProductPlan.model_validate(data)
         plan = plan.model_copy(
             update={
                 "platform_copies": self._normalize_platform_copies(
@@ -86,6 +152,7 @@ class ProductPlanningAgent:
         product: ProductContext,
         knowledge: str = "",
         platforms: list[str] | None = None,
+        notes: str = "",
     ) -> ProductPlan:
         platforms = _resolve_platforms(platforms)
         audience = product.target_audience or "目标用户"
@@ -105,6 +172,7 @@ class ProductPlanningAgent:
             f"{product.name}：{product.description}，适合{audience}在{scenario}中使用，"
             f"主打{selling_points[0]}。"
         )
+        detail_description = f"{product.description}，适合{audience}在{scenario}中使用。"
 
         _RULE_COPY = {
             "taobao": f"【{product.name}】{scenario}必备，{selling_points[0]}，限时优惠。",
@@ -119,10 +187,15 @@ class ProductPlanningAgent:
             for key in platform_copies:
                 platform_copies[key] += "（请对照知识库平台规则与违禁词自检）"
 
+        # 商家备注（上传商品图时一并填写）：并入卖点与详情，保证落库文案带上备注信息
+        if notes:
+            selling_points = selling_points + [f"商家备注：{notes}"]
+            detail_description += f"\n商家备注：{notes}"
+
         return ProductPlan(
             recommended_title=f"{product.name} {scenario}适用{product.category}好物",
             selling_points=selling_points,
-            detail_description=f"{product.description}，适合{audience}在{scenario}中使用。",
+            detail_description=detail_description,
             target_user_summary=f"目标用户为{audience}。",
             listing_suggestion="建议突出核心使用场景、价格优势和便捷体验。",
             seo_keywords=seo_keywords,

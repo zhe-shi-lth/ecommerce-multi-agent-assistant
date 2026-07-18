@@ -7,6 +7,7 @@ import chromadb
 from langchain_chroma import Chroma
 
 from app import config
+from app.settings_store import get_settings
 from app.rag.embeddings import get_embeddings
 from app.rag.loader import KnowledgeLoader
 from app.schemas.product import ProductContext
@@ -23,12 +24,14 @@ class CategoryKnowledgeService:
         self._disabled = False  # 构建失败/禁用 -> 永久降级为空检索
 
     def _ensure_built(self) -> None:
-        if self._built or self._disabled:
+        if self._disabled:
+            return
+        # 当前禁用：不构建、也不把"未构建"固化为禁用，便于后续在 UI 重新开启时重建。
+        if not get_settings().get("rag_enabled", False):
+            return
+        if self._built:
             return
         self._built = True
-        if not config.RAG_ENABLED:
-            self._disabled = True
-            return
         try:
             docs = KnowledgeLoader(
                 config.RAG_KNOWLEDGE_PATH,
@@ -54,7 +57,7 @@ class CategoryKnowledgeService:
 
     def retrieve(self, category: str, query: str, top_k: int | None = None) -> str:
         """按 category 元数据过滤，返回拼接的 chunk 文本；任何异常/禁用返回 ''。"""
-        if not config.RAG_ENABLED:
+        if not get_settings().get("rag_enabled", False):
             return ""
         self._ensure_built()
         if self._vectorstore is None:

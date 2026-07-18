@@ -11,6 +11,15 @@ import os
 from dotenv import load_dotenv
 
 from app import config
+from app.settings_store import get_settings
+
+
+def _image_model() -> str:
+    return get_settings().get("image", {}).get("model") or "wanx-v1"
+
+
+def _image_edit_model() -> str:
+    return get_settings().get("image", {}).get("edit_model") or "wanx2.1-imageedit"
 
 
 def generate_image(prompt: str, size: str = "1024*1024", n: int = 1) -> list[str]:
@@ -29,7 +38,7 @@ def generate_image(prompt: str, size: str = "1024*1024", n: int = 1) -> list[str
 
     dashscope.api_key = api_key
 
-    resp = ImageSynthesis.call(model="wanx-v1", prompt=prompt, size=size, n=n)
+    resp = ImageSynthesis.call(model=_image_model(), prompt=prompt, size=size, n=n)
     if getattr(resp, "status_code", None) != 200:
         raise RuntimeError(
             f"文生图失败: {getattr(resp, 'code', '')} {getattr(resp, 'message', '')}"
@@ -43,13 +52,21 @@ def generate_image(prompt: str, size: str = "1024*1024", n: int = 1) -> list[str
     return urls
 
 
-def generate_image_from_reference(
-    reference_image: str, prompt: str, size: str = "1024*1024", n: int = 1
+def generate_image_edit(
+    prompt: str,
+    base_image_url: str,
+    size: str = "1024*1024",
+    n: int = 1,
+    ref_strength: float = 0.4,
 ) -> list[str]:
-    """图生图：以 reference_image（base64 data URL 或公网 URL）为参考，按 prompt 生成新图。
+    """通义万相图生图（wanx2.1-imageedit，description_edit）。
 
-    使用万相 2.7 图像生成模型（wan2.7-image）；SDK 会自动把 base64 data URL 上传到 OSS，
-    无需调用方自行托管。返回生成图片的 URL 列表。
+    以 base_image_url（用户上传的商品图，base64 data URL）为底图，prompt 为对这张图的
+    修改目标（文案），在其基础上生成精修/改图结果。无 key / SDK 缺失 / 生成失败 -> 抛异常，
+    由 image_creative_agent 降级为占位图。
+
+    ref_strength：输出图与原图的相似度（0~1，越高越像原图）。默认 0.4，给修改留出空间；
+    若改得不够就调低，若商品主体都被改没了就调高。
     """
     load_dotenv(override=True)
     api_key = os.getenv("DASHSCOPE_API_KEY") or config.DASHSCOPE_API_KEY
@@ -58,27 +75,29 @@ def generate_image_from_reference(
 
     try:
         import dashscope
-        from dashscope.aigc.image_generation import ImageGeneration
+        from dashscope import ImageSynthesis
     except ImportError as e:  # SDK 未安装
         raise RuntimeError("dashscope SDK 未安装（pip install dashscope）") from e
 
     dashscope.api_key = api_key
-    messages = [
-        {"role": "user", "content": [{"image": reference_image}, {"text": prompt}]}
-    ]
-    resp = ImageGeneration.call(model="wan2.7-image", messages=messages, is_async=False)
+
+    resp = ImageSynthesis.call(
+        model=_image_edit_model(),
+        prompt=prompt,
+        base_image_url=base_image_url,
+        function="description_edit",
+        size=size,
+        n=n,
+        ref_strength=ref_strength,
+    )
     if getattr(resp, "status_code", None) != 200:
         raise RuntimeError(
             f"图生图失败: {getattr(resp, 'code', '')} {getattr(resp, 'message', '')}"
         )
 
-    out = dict(resp.output) if hasattr(resp.output, "get") else {}
-    urls: list[str] = []
-    for ch in out.get("choices") or []:
-        msg = ch.get("message", {}) if isinstance(ch, dict) else {}
-        for item in msg.get("content", []):
-            if isinstance(item, dict) and item.get("type") == "image" and item.get("image"):
-                urls.append(item["image"])
+    results = resp.output.get("results") if hasattr(resp.output, "get") else None
+    results = results or []
+    urls = [r.url for r in results if getattr(r, "url", None)]
     if not urls:
         raise RuntimeError("图生图返回为空")
-    return urls[:n] if n else urls
+    return urls

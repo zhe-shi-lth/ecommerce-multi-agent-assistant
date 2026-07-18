@@ -1,9 +1,13 @@
 import { agentApi } from "./client";
 import type { Json } from "./types";
 
-// 线1上架（目录优先）：勾选已有商品 + 选中平台，逐商品走 文案→图片→审批→落库。
-export const generateProductPlan = (body: { product_id: number; platforms: string[] }) =>
-  agentApi.post<Json>("/ecommerce/line1/product-plan", body);
+// 线1上架（目录优先）：勾选已有商品 + 选中平台，逐商品走 上传图/备注→文案→图片→审批→落库。
+export const generateProductPlan = (body: {
+  product_id: number;
+  platforms: string[];
+  reference_image?: string;
+  notes?: string;
+}) => agentApi.post<Json>("/ecommerce/line1/product-plan", body);
 
 export const generateImagePlan = (body: {
   product_id: number;

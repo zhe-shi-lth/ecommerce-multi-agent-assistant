@@ -29,6 +29,8 @@
   --warn-weak: #fdf3e1;
   --bad: #d03050;
   --bad-weak: #fbeaee;
+  --good: #1a8a4a;
+  --good-weak: #e7f6ee;
 
   /* 圆角 */
   --r-sm: 6px;
@@ -501,6 +503,21 @@ th.col-id {
   background: var(--bad-weak);
   border-color: #f0c2cb;
   color: var(--bad);
+}
+.notice-ok {
+  background: var(--good-weak);
+  border-color: #bfe6cf;
+  color: var(--good);
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.check-row input {
+  width: auto;
 }
 
 /* ============================ 空 / 加载态 ============================ */
@@ -1015,7 +1032,7 @@ details > .json-view {
   object-fit: cover;
 }
 
-/* 上传参考图预览（图生图步骤） */
+/* 商品图/参考图预览 */
 .ref-preview {
   display: flex;
   align-items: center;

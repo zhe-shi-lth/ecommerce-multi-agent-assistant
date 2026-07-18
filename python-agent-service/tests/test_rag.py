@@ -64,7 +64,7 @@ def test_loader_chunks_and_metadata(tmp_path):
 
 
 def test_retrieve_routes_by_category(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.rag.service.config.RAG_ENABLED", True)  # 测试封闭，不受本地 .env 关闭 RAG 影响
+    monkeypatch.setattr("app.rag.service.get_settings", lambda: {"rag_enabled": True})  # 测试封闭，不受本地默认关闭 RAG 影响
     _write_kb(tmp_path)
     docs = KnowledgeLoader(tmp_path).load()
     service = CategoryKnowledgeService(embeddings=DeterministicFakeEmbeddings())
@@ -88,13 +88,13 @@ def test_retrieve_routes_by_category(tmp_path, monkeypatch):
 
 
 def test_retrieve_disabled(monkeypatch, tmp_path):
-    monkeypatch.setattr("app.rag.service.config.RAG_ENABLED", False)
+    monkeypatch.setattr("app.rag.service.get_settings", lambda: {"rag_enabled": False})
     service = CategoryKnowledgeService(embeddings=DeterministicFakeEmbeddings())
     assert service.retrieve("Home", "anything") == ""
 
 
 def test_retrieve_for_product_uses_category(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.rag.service.config.RAG_ENABLED", True)  # 测试封闭，不受本地 .env 关闭 RAG 影响
+    monkeypatch.setattr("app.rag.service.get_settings", lambda: {"rag_enabled": True})  # 测试封闭，不受本地默认关闭 RAG 影响
     _write_kb(tmp_path)
     docs = KnowledgeLoader(tmp_path).load()
     service = CategoryKnowledgeService(embeddings=DeterministicFakeEmbeddings())
@@ -124,6 +124,7 @@ def test_retrieve_for_product_uses_category(tmp_path, monkeypatch):
 
 def test_build_failure_degrades(monkeypatch, tmp_path):
     _write_kb(tmp_path)
+    monkeypatch.setattr("app.rag.service.get_settings", lambda: {"rag_enabled": True})
     monkeypatch.setattr(
         "app.rag.service.get_embeddings",
         lambda: (_ for _ in ()).throw(RuntimeError("embeddings down")),
