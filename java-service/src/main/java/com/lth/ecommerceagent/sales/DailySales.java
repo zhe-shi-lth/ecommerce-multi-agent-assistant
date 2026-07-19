@@ -21,6 +21,10 @@ public class DailySales {
     @Column(name = "product_id", nullable = false)
     private Long productId;
 
+    // 销售来源平台：taobao / douyin / xiaohongshu；历史/未指定数据为 unspecified
+    @Column(name = "platform", nullable = false, length = 20)
+    private String platform = "unspecified";
+
     @Column(name = "sale_date", nullable = false)
     private LocalDate saleDate;
 
@@ -47,6 +51,14 @@ public class DailySales {
 
     public void setProductId(Long productId) {
         this.productId = productId;
+    }
+
+    public String getPlatform() {
+        return platform;
+    }
+
+    public void setPlatform(String platform) {
+        this.platform = platform;
     }
 
     public LocalDate getSaleDate() {

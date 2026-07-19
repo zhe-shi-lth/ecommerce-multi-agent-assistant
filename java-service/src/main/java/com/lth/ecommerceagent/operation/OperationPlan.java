@@ -38,6 +38,10 @@ public class OperationPlan {
     @JoinColumn(name = "order_id", nullable = true)
     private Order order;
 
+    // 关联平台：taobao / douyin / xiaohongshu；历史/未指定数据为 unspecified
+    @Column(name = "platform", nullable = false, length = 20)
+    private String platform = "unspecified";
+
     // 业务线：LINE1_ONBOARDING=新品上架流水线；LINE2_MONITOR=每日监控（库存/履约）
     @Column(name = "line", length = 40)
     private String line;
@@ -111,6 +115,14 @@ public class OperationPlan {
 
     public void setOrder(Order order) {
         this.order = order;
+    }
+
+    public String getPlatform() {
+        return platform;
+    }
+
+    public void setPlatform(String platform) {
+        this.platform = platform;
     }
 
     public String getLine() {

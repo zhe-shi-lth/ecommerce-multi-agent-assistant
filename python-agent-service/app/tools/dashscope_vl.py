@@ -1,53 +1,49 @@
-"""通义千问视觉模型（DashScope）封装：看图生成文本。
+"""多模态视觉模型封装：看图生成文本（OpenAI 兼容协议）。
 
-用于「上传商品图 → 结合图片与商家备注生成文案」的多模态场景，复用 DASHSCOPE_API_KEY。
-百炼平台需经官方 dashscope SDK 解析正确的 workspace/endpoint（裸 HTTP 调用会被拒），
-故此处走 SDK 的 MultiModalConversation。
+用于「上传商品图 → 结合图片与商家备注生成文案」的多模态场景。
+支持任意 OpenAI 兼容的多模态端点（通义千问 VL / GPT-4o / 智谱 GLM-4V / Kimi / Ollama 本地等），
+按设置中心「视觉模型」卡片的 base_url / api_key / model 调用；未显式填写时回退默认值。
+
+Key 只来自页面「设置中心」，不读 .env（面向最终用户，页面即唯一配置来源）。
 
 vl_chat(system_prompt, text, image) -> str：返回视觉模型的文本回复。
-无 key / SDK 缺失 / 调用失败 -> 抛异常，由调用方降级到规则实现。
+无 key / 依赖缺失 / 调用失败 -> 抛异常，由调用方降级到规则实现。
 """
-import os
-
-from dotenv import load_dotenv
-
-from app import config
-from app.settings_store import get_settings
+from app.settings_store import resolve_vision_credentials
 
 
 def vl_chat(system_prompt: str, text: str, image: str, model: str | None = None) -> str:
-    # fastapi dev 的 reload 不监听 .env；请求时强制重新读取，确保运行时新增的 key 即时生效。
-    load_dotenv(override=True)
-    api_key = os.getenv("DASHSCOPE_API_KEY") or config.DASHSCOPE_API_KEY
-    if not api_key:
-        raise RuntimeError("DASHSCOPE_API_KEY 未配置，无法看图生成文案")
+    base_url, api_key, resolved_model = resolve_vision_credentials()
+    model = model or resolved_model
+    if not api_key or not base_url:
+        raise RuntimeError("视觉模型未配置（需在设置中心填写 API Key 与 base_url）")
 
     try:
-        import dashscope
-        from dashscope import MultiModalConversation
-    except ImportError as e:  # SDK 未安装
-        raise RuntimeError("dashscope SDK 未安装（pip install dashscope）") from e
+        from langchain_openai import ChatOpenAI
+    except ImportError as e:  # 依赖未安装
+        raise RuntimeError("langchain-openai 未安装（pip install langchain-openai）") from e
 
-    dashscope.api_key = api_key
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"image": image},
-                {"text": f"{system_prompt}\n\n{text}"},
-            ],
-        }
-    ]
-    vision_model = model or get_settings().get("vision", {}).get("model") or config.DASHSCOPE_VL_MODEL
-    resp = MultiModalConversation.call(model=vision_model, messages=messages)
-    if getattr(resp, "status_code", None) != 200:
-        raise RuntimeError(
-            f"视觉模型调用失败: {getattr(resp, 'code', '')} {getattr(resp, 'message', '')}"
-        )
-
-    out = resp.output
-    choices = out.get("choices") if hasattr(out, "get") else None
-    choices = choices or []
-    parts = choices[0].get("message", {}).get("content", []) if choices else []
-    texts = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")]
-    return "\n".join(texts).strip()
+    chat = ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        temperature=0.3,
+        max_retries=1,
+    )
+    resp = chat.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image}},
+                    {"type": "text", "text": text},
+                ],
+            },
+        ]
+    )
+    out = getattr(resp, "content", "") or ""
+    # 部分实现把多模态回复返回为分块列表，统一成字符串。
+    if isinstance(out, list):
+        out = "".join(p.get("text", "") for p in out if isinstance(p, dict))
+    return out.strip()

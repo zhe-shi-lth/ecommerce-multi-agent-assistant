@@ -18,9 +18,14 @@ public class DailySalesController {
     }
 
     @GetMapping
-    public List<DailySales> list(@RequestParam(required = false) Long productId) {
+    public List<DailySales> list(
+            @RequestParam(required = false) Long productId,
+            @RequestParam(required = false) String platform) {
         if (productId != null) {
             return repository.findByProductIdOrderBySaleDateAsc(productId);
+        }
+        if (platform != null && !platform.isBlank()) {
+            return repository.findByPlatformOrderBySaleDateAsc(platform);
         }
         return repository.findAll();
     }

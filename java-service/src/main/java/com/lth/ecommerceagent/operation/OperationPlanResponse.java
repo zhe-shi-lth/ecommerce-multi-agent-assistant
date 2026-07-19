@@ -8,6 +8,7 @@ public record OperationPlanResponse(
         String traceId,
         Long productId,
         Long orderId,
+        String platform,
         Map<String, Object> productPlanJson,
         Map<String, Object> imagePlanJson,
         Map<String, Object> inventoryPlanJson,
@@ -19,5 +20,7 @@ public record OperationPlanResponse(
         Instant confirmedAt,
         Instant createdAt,
         Instant updatedAt,
-        String line) {
+        String line,
+        Boolean auditPassed,
+        String auditMessage) {
 }

@@ -8,6 +8,7 @@ export interface OperationPlan {
   traceId: string;
   productId: number;
   orderId: number;
+  platform: string;
   productPlanJson: Record<string, Json> | null;
   imagePlanJson: Record<string, Json> | null;
   inventoryPlanJson: Record<string, Json> | null;
@@ -19,6 +20,8 @@ export interface OperationPlan {
   confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  auditPassed?: boolean | null;
+  auditMessage?: string | null;
 }
 
 export interface AgentRun {
@@ -71,6 +74,7 @@ export interface Inventory {
 export interface Order {
   id: number;
   productId: number;
+  platform: string;
   quantity: number;
   status: string;
   addressComplete: boolean;
@@ -93,8 +97,23 @@ export interface FavoriteCopy {
 export interface DailySales {
   id: number;
   productId: number;
+  platform: string;
   saleDate: string;
   revenue: number;
   units: number;
   orderCount: number;
+}
+
+// 线2 智能库存预警（销售监控页警告板块）
+export interface InventoryWarning {
+  productId: number;
+  productName: string;
+  currentStock: number;
+  dailyDemand: number;
+  adjustedDemand: number;
+  eventMultiplier: number;
+  activeEvents: string[];
+  sellableDays: number | null;
+  level: string;
+  warnings: string[];
 }

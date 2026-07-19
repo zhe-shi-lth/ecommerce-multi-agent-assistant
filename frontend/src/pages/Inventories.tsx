@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getInventories,
   createInventory,
+  updateInventory,
   type CreateInventoryInput,
 } from "../api/inventories";
 import { getProducts } from "../api/products";
@@ -16,6 +17,13 @@ const EMPTY_FORM: CreateInventoryInput = {
   safeStockThreshold: 0,
 };
 
+// 与服务端 recomputeStatus 规则保持一致，补货后重算水位徽章。
+function computeStatus(currentStock: number, safeThreshold: number): string {
+  if (currentStock < safeThreshold) return "RISK";
+  if (currentStock < safeThreshold * 2) return "LOW";
+  return "ENOUGH";
+}
+
 export default function Inventories() {
   const [rows, setRows] = useState<Inventory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -24,6 +32,12 @@ export default function Inventories() {
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<CreateInventoryInput>(EMPTY_FORM);
+
+  // 补货弹窗状态
+  const [replenishTarget, setReplenishTarget] = useState<Inventory | null>(null);
+  const [replenishQty, setReplenishQty] = useState("");
+  const [replenishBusy, setReplenishBusy] = useState(false);
+  const [replenishError, setReplenishError] = useState<string | null>(null);
 
   function refreshAll() {
     setLoading(true);
@@ -55,6 +69,52 @@ export default function Inventories() {
   function setField(key: keyof CreateInventoryInput, value: string) {
     setForm((prev) => ({ ...prev, [key]: value === "" ? 0 : Number(value) }));
   }
+
+  // 库存记录只存 productId，表格里需要回查商品名称展示。
+  function productName(id: number): string {
+    const p = products.find((x) => x.id === id);
+    return p ? p.name : `#${id}`;
+  }
+
+  function openReplenish(inv: Inventory) {
+    setReplenishTarget(inv);
+    setReplenishQty("");
+    setReplenishError(null);
+  }
+
+  function cancelReplenish() {
+    setReplenishTarget(null);
+    setReplenishQty("");
+    setReplenishError(null);
+  }
+
+  async function handleReplenish() {
+    if (!replenishTarget) return;
+    const add = Number(replenishQty);
+    if (!(add > 0)) return;
+    setReplenishBusy(true);
+    setReplenishError(null);
+    try {
+      const newStock = replenishTarget.currentStock + add;
+      const updated = await updateInventory(replenishTarget.id, {
+        productId: replenishTarget.productId,
+        currentStock: newStock,
+        safeStockThreshold: replenishTarget.safeStockThreshold,
+        reservedStock: replenishTarget.reservedStock,
+        purchaseCycleDays: replenishTarget.purchaseCycleDays,
+        salesLast7Days: replenishTarget.salesLast7Days,
+        inventoryStatus: computeStatus(newStock, replenishTarget.safeStockThreshold),
+      });
+      setRows((rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
+      cancelReplenish();
+    } catch (e) {
+      setReplenishError(String(e));
+    } finally {
+      setReplenishBusy(false);
+    }
+  }
+
+  const replenishValid = replenishTarget != null && Number(replenishQty) > 0;
 
   return (
     <section>
@@ -127,13 +187,14 @@ export default function Inventories() {
                     <th>采购周期(天)</th>
                     <th>近7天销量</th>
                     <th>状态</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((i) => (
                     <tr key={i.id}>
                       <td className="col-id">{i.id}</td>
-                      <td>{i.productId}</td>
+                      <td>{productName(i.productId)}</td>
                       <td>{i.currentStock}</td>
                       <td>{i.reservedStock}</td>
                       <td>{i.safeStockThreshold}</td>
@@ -142,12 +203,53 @@ export default function Inventories() {
                       <td>
                         <StatusBadge status={i.inventoryStatus} />
                       </td>
+                      <td>
+                        <button className="btn btn-secondary btn-sm" onClick={() => openReplenish(i)}>
+                          补货
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {replenishTarget && (
+        <div className="modal-overlay" onClick={cancelReplenish}>
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">补货 · {productName(replenishTarget.productId)}</div>
+            <div className="modal-body">
+              <p className="muted" style={{ marginTop: 0 }}>
+                当前库存：{replenishTarget.currentStock}（安全阈值 {replenishTarget.safeStockThreshold}）
+              </p>
+              <div className="field" style={{ marginTop: 8 }}>
+                <span>补货数量 *</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={replenishQty}
+                  onChange={(e) => setReplenishQty(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              {replenishError && <div className="error" style={{ marginTop: 8 }}>{replenishError}</div>}
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={cancelReplenish} disabled={replenishBusy}>
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleReplenish}
+                disabled={replenishBusy || !replenishValid}
+              >
+                {replenishBusy ? "提交中…" : "确认补货"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

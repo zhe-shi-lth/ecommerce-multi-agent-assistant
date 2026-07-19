@@ -5,12 +5,21 @@ import { getAgentRunsByPlan } from "../api/agents";
 import type { AgentRun, Json, OperationPlan } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import JsonView from "../components/JsonView";
+import PlanFields from "../components/PlanView";
+import { platformLabel, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
+import AlertModal from "../components/AlertModal";
 
 interface PlanBlock {
   title: string;
   data: Record<string, Json> | null;
 }
+
+const CONFIRM_LABEL: Record<string, string> = {
+  PENDING: "待你审核",
+  CONFIRMED: "已发布",
+  REJECTED: "已驳回",
+};
 
 export default function OperationPlanDetail() {
   const { id } = useParams();
@@ -19,6 +28,7 @@ export default function OperationPlanDetail() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionKind, setActionKind] = useState<"confirm" | "reject" | null>(null);
   const [acting, setActing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [exportContent, setExportContent] = useState<string | null>(null);
@@ -52,6 +62,7 @@ export default function OperationPlanDetail() {
   async function handleDecision(kind: "confirm" | "reject") {
     setActing(true);
     setActionError(null);
+    setActionKind(kind);
     try {
       const updated =
         kind === "confirm"
@@ -99,10 +110,10 @@ export default function OperationPlanDetail() {
   }
 
   const blocks: PlanBlock[] = [
-    { title: "商品规划 (ProductPlan)", data: plan.productPlanJson },
-    { title: "图片创意 (ImagePlan)", data: plan.imagePlanJson },
-    { title: "库存采购 (InventoryPlan)", data: plan.inventoryPlanJson },
-    { title: "订单履约 (FulfillmentPlan)", data: plan.fulfillmentPlanJson },
+    { title: "商品规划", data: plan.productPlanJson },
+    { title: "图片创意", data: plan.imagePlanJson },
+    { title: "库存采购", data: plan.inventoryPlanJson },
+    { title: "订单履约", data: plan.fulfillmentPlanJson },
   ];
 
   return (
@@ -113,7 +124,8 @@ export default function OperationPlanDetail() {
       />
       <div className="meta">
         <span>状态: <StatusBadge status={plan.status} /></span>
-        <span>确认状态: <StatusBadge status={confirmationStatus} /></span>
+        <span>确认状态: {CONFIRM_LABEL[confirmationStatus] ?? confirmationStatus}</span>
+        <span>平台: <span className={`badge badge-${platformTone(plan.platform)}`}>{platformLabel(plan.platform)}</span></span>
         <span>需人工审核: {plan.manualReviewRequired ? "是" : "否"}</span>
       </div>
 
@@ -122,19 +134,28 @@ export default function OperationPlanDetail() {
           {pending ? (
             <>
               <button className="btn btn-primary" onClick={() => handleDecision("confirm")} disabled={acting}>
-                {acting ? "处理中…" : "确认计划"}
+                {acting ? "处理中…" : "同意并发布"}
               </button>
               <button className="btn btn-secondary" onClick={() => handleDecision("reject")} disabled={acting}>
                 {acting ? "处理中…" : "驳回计划"}
               </button>
+              <span className="muted">同意后将由线2审核库存（需 currentStock &gt; 安全阈值），通过才发布商品</span>
             </>
           ) : (
             <p className="muted">
-              已{confirmationStatus === "CONFIRMED" ? "确认" : "驳回"}
+              已{confirmationStatus === "CONFIRMED" ? "确认并发布" : "驳回"}
               {plan.confirmedAt ? `（${plan.confirmedAt}）` : ""}
+              {plan.auditMessage ? ` — ${plan.auditMessage}` : ""}
             </p>
           )}
-          {actionError && <span className="error">操作失败：{actionError}</span>}
+          {actionError && (
+            <AlertModal
+              open={!!actionError}
+              title={actionKind === "reject" ? "无法驳回计划" : "无法发布"}
+              message={actionError}
+              onClose={() => setActionError(null)}
+            />
+          )}
         </div>
 
         <div className="export-actions">
@@ -175,39 +196,41 @@ export default function OperationPlanDetail() {
         <p style={{ margin: 0 }}>{plan.finalSummary}</p>
       </div>
 
-      <h3 style={{ marginBottom: 12 }}>各 Agent 产出</h3>
+      <h3 style={{ marginBottom: 12 }}>方案详情</h3>
       <div className="plan-blocks">
         {blocks.map((b) => (
           <div className="plan-block" key={b.title}>
             <h4>{b.title}</h4>
-            <JsonView data={b.data as Json | null} />
+            <PlanFields data={b.data as { [key: string]: Json } | null} />
           </div>
         ))}
       </div>
 
-      <h3 style={{ margin: "20px 0 12px" }}>Agent 执行 Trace（{runs.length}）</h3>
-      <div className="runs">
-        {runs.map((r) => (
-          <details className="run" key={r.id}>
-            <summary>
-              <StatusBadge status={r.status} />
-              <span className="agent-name">{r.agentName}</span>
-              <span className="muted">{r.durationMs !== null ? `${r.durationMs} ms` : "—"}</span>
-            </summary>
-            {r.errorMessage && <p className="error">错误：{r.errorMessage}</p>}
-            <div className="run-io">
-              <div>
-                <h5>输入</h5>
-                <JsonView data={r.inputJson as Json | null} />
+      <details className="runs-wrap">
+        <summary className="runs-summary">执行记录（技术详情，{runs.length} 条）</summary>
+        <div className="runs">
+          {runs.map((r) => (
+            <details className="run" key={r.id}>
+              <summary>
+                <StatusBadge status={r.status} />
+                <span className="agent-name">{r.agentName}</span>
+                <span className="muted">{r.durationMs !== null ? `${r.durationMs} ms` : "—"}</span>
+              </summary>
+              {r.errorMessage && <p className="error">错误：{r.errorMessage}</p>}
+              <div className="run-io">
+                <div>
+                  <h5>输入</h5>
+                  <JsonView data={r.inputJson as Json | null} />
+                </div>
+                <div>
+                  <h5>输出</h5>
+                  <JsonView data={r.outputJson as Json | null} />
+                </div>
               </div>
-              <div>
-                <h5>输出</h5>
-                <JsonView data={r.outputJson as Json | null} />
-              </div>
-            </div>
-          </details>
-        ))}
-      </div>
+            </details>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }

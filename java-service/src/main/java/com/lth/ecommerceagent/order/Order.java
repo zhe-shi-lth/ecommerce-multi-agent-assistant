@@ -27,6 +27,10 @@ public class Order {
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
 
+    // 订单来源平台：taobao / douyin / xiaohongshu；历史/未指定数据为 unspecified
+    @Column(name = "platform", nullable = false, length = 20)
+    private String platform = "unspecified";
+
     @Column(nullable = false)
     private Integer quantity;
 
@@ -67,6 +71,14 @@ public class Order {
 
     public void setProduct(Product product) {
         this.product = product;
+    }
+
+    public String getPlatform() {
+        return platform;
+    }
+
+    public void setPlatform(String platform) {
+        this.platform = platform;
     }
 
     public Integer getQuantity() {

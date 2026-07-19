@@ -7,7 +7,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.settings_store import DEFAULT_SETTINGS, get_settings, save_settings
+from app.settings_store import DEFAULT_SETTINGS, capabilities, get_settings, save_settings
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["settings"])
 
@@ -64,6 +64,15 @@ def _validate(patch: dict) -> dict:
 @router.get("/settings")
 def get_settings_endpoint() -> dict:
     return get_settings()
+
+
+@router.get("/capabilities")
+def capabilities_endpoint() -> dict:
+    """各模型功能当前是否可用（基于部署开关 + 运行时设置 + 是否填了 Key）。
+
+    前端在调用大模型功能前据此拦截并提示用户去设置中心填 Key。
+    """
+    return capabilities()
 
 
 @router.put("/settings")

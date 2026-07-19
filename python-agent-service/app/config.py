@@ -58,6 +58,10 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 IMAGE_GEN_ENABLED = _as_bool(os.getenv("IMAGE_GEN_ENABLED"), default=False)
 # 通义千问视觉模型（看图写文案用），与文生图共用 DASHSCOPE_API_KEY
 DASHSCOPE_VL_MODEL = os.getenv("DASHSCOPE_VL_MODEL", "qwen-vl-max")
+# DashScope 的 OpenAI 兼容端点（文本 + 视觉多模态共用），可被设置中心覆盖。
+DASHSCOPE_BASE_URL = os.getenv(
+    "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
 
 # 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
 BASE_DIR = Path(__file__).resolve().parents[1]

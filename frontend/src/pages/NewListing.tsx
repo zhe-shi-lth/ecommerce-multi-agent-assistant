@@ -5,16 +5,17 @@ import {
   generateImagePlan,
   generateProductPlan,
 } from "../api/line1";
+import { getCapabilities, type Capabilities, type CapFeature } from "../api/capabilities";
 import { getProducts } from "../api/products";
 import type { Json, Product } from "../api/types";
 import JsonView from "../components/JsonView";
 import PageHeader from "../components/PageHeader";
 
-// 平台定义：小红书当前可勾选，淘宝/抖音留位灰显。
+// 平台定义：三个平台均可勾选（多选）。
 const PLATFORMS = [
   { key: "xiaohongshu", label: "小红书", enabled: true },
-  { key: "taobao", label: "淘宝", enabled: false },
-  { key: "douyin", label: "抖音", enabled: false },
+  { key: "taobao", label: "淘宝", enabled: true },
+  { key: "douyin", label: "抖音", enabled: true },
 ];
 
 type Phase = "select" | "copy" | "upload" | "image" | "done";
@@ -52,11 +53,25 @@ export default function NewListing() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 模型功能可用性（后端按设置/Key 探测）：用于在没填 Key 时拦截大模型功能并提示去设置中心。
+  const [caps, setCaps] = useState<Capabilities | null>(null);
+  const [needKey, setNeedKey] = useState<CapFeature | null>(null);
+
   useEffect(() => {
     getProducts()
       .then(setProducts)
       .catch((e) => setError(String(e)));
   }, []);
+
+  // 进入「上传图 / 图片」这类依赖模型能力的步骤时，重新拉一次可用性
+  //（用户在设置中心填完 Key 返回后，能立刻解除拦截）。
+  useEffect(() => {
+    if (phase === "upload" || phase === "image") {
+      getCapabilities()
+        .then(setCaps)
+        .catch(() => setCaps(null));
+    }
+  }, [phase]);
 
   const selectedProducts = products.filter((p) => selected.includes(p.id));
   const current = selectedProducts[index];
@@ -91,6 +106,12 @@ export default function NewListing() {
 
   // 上传商品图+备注后生成文案（视觉模型看图/备注写文案），进入文案审批步骤。
   async function generateCopy() {
+    setNeedKey(null);
+    // 传了商品图 → 走视觉大模型（看图写文案），没填 Key 提前拦截提示。
+    if (refImage && caps && !caps.vision.available) {
+      setNeedKey("vision");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -113,6 +134,12 @@ export default function NewListing() {
   // 没传图走文生图（仅按文案）。
   async function generateFinalImages() {
     if (!productPlan) return;
+    setNeedKey(null);
+    // 文生图/图生图依赖出图大模型，没填 Key 提前拦截提示。
+    if (caps && !caps.image.available) {
+      setNeedKey("image");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -220,6 +247,20 @@ export default function NewListing() {
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
 
+      {needKey && (
+        <div className="notice notice-warn">
+          <span>
+            该功能需要配置模型 API Key：
+            {needKey === "vision"
+              ? "「设置中心 → 视觉模型（或 LLM）」未填写 API Key，看图写文案无法运行。"
+              : "「设置中心 → 视觉模型 / LLM」未填写 DashScope API Key，文生图/图生图无法运行。"}
+          </span>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate("/settings")}>
+            去设置中心填写
+          </button>
+        </div>
+      )}
+
       <ul className="stepper">
         {STEP_LABELS.map((label, i) => (
           <li key={label} className={stepState(i)}>
@@ -245,7 +286,6 @@ export default function NewListing() {
                     onChange={() => togglePlatform(p.key)}
                   />
                   <span>{p.label}</span>
-                  {!p.enabled && <span className="ci-meta">（即将上线）</span>}
                 </label>
               ))}
             </div>
@@ -355,6 +395,11 @@ export default function NewListing() {
               重新选择商品
             </button>
           </div>
+          {caps && !caps.image.available && (
+            <p className="ci-meta" style={{ marginTop: 10 }}>
+              未检测到出图 API Key，文生图/图生图功能不可用。请先到「设置中心」填写 DashScope Key。
+            </p>
+          )}
         </div>
       )}
 
@@ -403,6 +448,11 @@ export default function NewListing() {
               返回上一步
             </button>
           </div>
+          {refImage && caps && !caps.vision.available && (
+            <p className="ci-meta" style={{ marginTop: 10 }}>
+              未检测到视觉模型 API Key，看图写文案功能不可用。请先到「设置中心 → 视觉模型」填写。
+            </p>
+          )}
         </div>
       )}
 

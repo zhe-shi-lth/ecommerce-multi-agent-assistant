@@ -104,7 +104,12 @@ def line1_image_plan(req: Line1ImageRequest) -> ImagePlan:
 
 @router.post("/line1/finalize")
 def line1_finalize(req: Line1FinalizeRequest) -> dict:
-    """落库：商品已存在（目录优先），只建一条仅含文案+图片创意的运营计划。"""
+    """落库：商品已存在（目录优先），只建一条仅含文案+图片创意的运营计划。
+
+    注意：finalize 不再自动发布商品。发布是唯一的闸门——
+    由「运营计划详情页 → 同意」触发线2 确定性审核(库存是否充足)，
+    审核通过才将该商品标记为 PUBLISHED。
+    """
     client = JavaApiClient()
     final_summary = (
         f"线1上架：{req.product_plan.recommended_title}；"

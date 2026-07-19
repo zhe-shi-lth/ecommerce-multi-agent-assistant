@@ -5,6 +5,7 @@ import java.time.Instant;
 public record OrderResponse(
         Long id,
         Long productId,
+        String platform,
         Integer quantity,
         String status,
         Boolean addressComplete,

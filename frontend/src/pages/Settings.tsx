@@ -1,21 +1,29 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings } from "../api/settings";
+import { LLM_PRESETS, VISION_PRESETS, presetOf } from "../api/presets";
 import type { Json } from "../api/types";
 import PageHeader from "../components/PageHeader";
 
 interface Settings {
-  llm: { enabled: boolean; vendor: string; model: string };
-  vision: { vendor: string; model: string };
-  image: { enabled: boolean; model: string; edit_model: string; ref_strength: number };
+  llm: {
+    enabled: boolean;
+    vendor: string;
+    base_url: string;
+    model: string;
+    api_key: string;
+  };
+  vision: {
+    vendor: string;
+    base_url: string;
+    model: string;
+    api_key: string;
+  };
+  image: { enabled: boolean; ref_strength: number };
   image_review_enabled: boolean;
   rag_enabled: boolean;
 }
 
-const LLM_VENDORS = [
-  { key: "dashscope", label: "DashScope（通义千问，需 DASHSCOPE_API_KEY）" },
-  { key: "ollama", label: "Ollama（本地，需已启动）" },
-  { key: "openai", label: "OpenAI（需 OPENAI_API_KEY）" },
-];
+type Group = "llm" | "vision";
 
 // 把后端 Json 规整为本页强类型（缺字段时用默认值兜底）。
 function normalize(raw: Json): Settings {
@@ -25,14 +33,24 @@ function normalize(raw: Json): Settings {
   const image = (obj.image && typeof obj.image === "object" ? obj.image : {}) as Record<string, Json>;
   const str = (v: Json, d = "") => (typeof v === "string" ? v : d);
   const bool = (v: Json, d = true) => (typeof v === "boolean" ? v : d);
-  const num = (v: Json, d = 0.4) => (typeof v === "number" ? v : typeof v === "string" && !isNaN(Number(v)) ? Number(v) : d);
+  const num = (v: Json, d = 0.4) =>
+    typeof v === "number" ? v : typeof v === "string" && !isNaN(Number(v)) ? Number(v) : d;
   return {
-    llm: { enabled: bool(llm.enabled, true), vendor: str(llm.vendor, "dashscope"), model: str(llm.model) },
-    vision: { vendor: str(vision.vendor, "dashscope"), model: str(vision.model, "qwen-vl-max") },
+    llm: {
+      enabled: bool(llm.enabled, true),
+      vendor: str(llm.vendor, "dashscope"),
+      base_url: str(llm.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+      model: str(llm.model),
+      api_key: str(llm.api_key),
+    },
+    vision: {
+      vendor: str(vision.vendor, "dashscope"),
+      base_url: str(vision.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+      model: str(vision.model, "qwen-vl-max"),
+      api_key: str(vision.api_key),
+    },
     image: {
       enabled: bool(image.enabled, true),
-      model: str(image.model, "wanx-v1"),
-      edit_model: str(image.edit_model, "wanx2.1-imageedit"),
       ref_strength: num(image.ref_strength, 0.4),
     },
     image_review_enabled: bool(obj.image_review_enabled, true),
@@ -56,6 +74,25 @@ export default function Settings() {
     setSettings((prev) => {
       if (!prev) return prev;
       return { ...prev, [group]: { ...(prev[group] as object), ...patch } } as Settings;
+    });
+    setSaved(false);
+  }
+
+  // 选了厂家预设 → 把官方 base_url / 默认模型填进表单（Key 不动，由用户填）。选「自定义」则留空。
+  function applyPreset(group: Group, key: string) {
+    const preset = presetOf(group === "llm" ? LLM_PRESETS : VISION_PRESETS, key);
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const g = prev[group] as Record<string, string>;
+      return {
+        ...prev,
+        [group]: {
+          ...g,
+          vendor: key,
+          base_url: preset ? preset.base_url : "",
+          model: preset ? preset.default_model : "",
+        },
+      } as Settings;
     });
     setSaved(false);
   }
@@ -88,7 +125,7 @@ export default function Settings() {
     <section>
       <PageHeader
         title="设置中心"
-        subtitle="这里的设置会持久化保存（重启后保留），后续生成按此设定走。API Key 等凭证仍在 .env，不在本页。"
+        subtitle="这里的设置会持久化保存（重启后保留），后续生成按此设定走。各厂家均为 OpenAI 兼容协议：选预设后只填 API Key 即可；未填 Key 的云端厂家将走规则/占位，不读取任何配置文件。"
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
       {saved && <div className="notice notice-ok">已保存，后续生成按新设定执行。</div>}
@@ -104,12 +141,12 @@ export default function Settings() {
           <span>启用 LLM（关闭则 Agent 走规则实现）</span>
         </label>
         <div className="field" style={{ marginBottom: 12 }}>
-          <span>厂家</span>
+          <span>厂家预设</span>
           <select
             value={settings.llm.vendor}
-            onChange={(e) => update("llm", { vendor: e.target.value })}
+            onChange={(e) => applyPreset("llm", e.target.value)}
           >
-            {LLM_VENDORS.map((v) => (
+            {LLM_PRESETS.map((v) => (
               <option key={v.key} value={v.key}>
                 {v.label}
               </option>
@@ -117,11 +154,33 @@ export default function Settings() {
           </select>
         </div>
         <div className="field" style={{ marginBottom: 12 }}>
+          <span>Base URL（OpenAI 兼容）</span>
+          <input
+            value={settings.llm.base_url}
+            placeholder="https://.../v1"
+            onChange={(e) => update("llm", { base_url: e.target.value })}
+          />
+        </div>
+        <div className="field" style={{ marginBottom: 12 }}>
           <span>模型名（留空用厂家默认）</span>
           <input
             value={settings.llm.model}
-            placeholder="如 qwen-plus / qwen2.5:latest / gpt-4o-mini"
+            placeholder="如 qwen-plus / deepseek-chat / gpt-4o-mini"
             onChange={(e) => update("llm", { model: e.target.value })}
+          />
+        </div>
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            API Key（可选）
+            <br />
+            <small className="muted">留空则不使用云端 LLM（Agent 走规则实现）；Ollama 本地可不填。</small>
+          </span>
+          <input
+            type="password"
+            value={settings.llm.api_key}
+            placeholder="sk-...（留空则用 .env）"
+            autoComplete="off"
+            onChange={(e) => update("llm", { api_key: e.target.value })}
           />
         </div>
       </div>
@@ -129,23 +188,54 @@ export default function Settings() {
       <div className="card listing-review">
         <h3 style={{ marginTop: 0 }}>视觉模型（看图写文案）</h3>
         <div className="field" style={{ marginBottom: 12 }}>
-          <span>厂家</span>
-          <select value={settings.vision.vendor} disabled>
-            <option value="dashscope">DashScope（当前唯一支持）</option>
+          <span>厂家预设</span>
+          <select
+            value={settings.vision.vendor}
+            onChange={(e) => applyPreset("vision", e.target.value)}
+          >
+            {VISION_PRESETS.map((v) => (
+              <option key={v.key} value={v.key}>
+                {v.label}
+              </option>
+            ))}
           </select>
+        </div>
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>Base URL（OpenAI 兼容多模态）</span>
+          <input
+            value={settings.vision.base_url}
+            placeholder="https://.../v1"
+            onChange={(e) => update("vision", { base_url: e.target.value })}
+          />
         </div>
         <div className="field" style={{ marginBottom: 12 }}>
           <span>模型名</span>
           <input
             value={settings.vision.model}
-            placeholder="如 qwen-vl-max"
+            placeholder="如 qwen-vl-max / gpt-4o / glm-4v-plus"
             onChange={(e) => update("vision", { model: e.target.value })}
+          />
+        </div>
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            API Key（可选）
+            <br />
+            <small className="muted">
+              留空则复用「文本大模型」里填的 Key（出图也用此 Key）。
+            </small>
+          </span>
+          <input
+            type="password"
+            value={settings.vision.api_key}
+            placeholder="sk-...（留空则用 LLM 的 Key）"
+            autoComplete="off"
+            onChange={(e) => update("vision", { api_key: e.target.value })}
           />
         </div>
       </div>
 
       <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>出图模型</h3>
+        <h3 style={{ marginTop: 0 }}>出图模型（DashScope 万相）</h3>
         <label className="check-row">
           <input
             type="checkbox"
@@ -154,22 +244,6 @@ export default function Settings() {
           />
           <span>启用真实文生图 / 图生图</span>
         </label>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>文生图模型（无原图时）</span>
-          <input
-            value={settings.image.model}
-            placeholder="如 wanx-v1"
-            onChange={(e) => update("image", { model: e.target.value })}
-          />
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>图生图模型（有原图时）</span>
-          <input
-            value={settings.image.edit_model}
-            placeholder="如 wanx2.1-imageedit"
-            onChange={(e) => update("image", { edit_model: e.target.value })}
-          />
-        </div>
         <div className="field" style={{ marginBottom: 12 }}>
           <span>
             图文比重（ref_strength）：{settings.image.ref_strength.toFixed(2)}

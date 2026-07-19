@@ -1,7 +1,8 @@
 """LLM 客户端抽象与实现。
 
 设计目标：
-- 厂家经设置中心运行时切换：dashscope / ollama / openai（凭证仍走 .env，不进 UI）。
+- 接入「OpenAI 兼容」协议，厂家由设置中心运行时切换：base_url / api_key / model 均从设置读取，
+  前端按各厂家官方文档预置（通义/DashScope、DeepSeek、Kimi、智谱 GLM、OpenAI、Ollama、自定义）。
 - 结构化输出直接复用现有 Pydantic Schema（Agent 输出与 Java 落库契约不变）。
 - `get_llm_client()` 按运行时设置返回 client；禁用、构造失败或端点不可达时返回 None，
   Agent 自动走规则 fallback。设置变更后由 settings_store 调用 reset() 清缓存即时生效。
@@ -67,22 +68,6 @@ class StubClient(LLMClient):
         return self._factory(system, user, schema)
 
 
-# 厂家 -> (base_url, api_key, 默认模型)。凭证来自 .env，不进设置/UI。
-_VENDOR_ENDPOINTS = {
-    "dashscope": (
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        config.DASHSCOPE_API_KEY,
-        "qwen-plus",
-    ),
-    "ollama": (config.LLM_BASE_URL, config.LLM_API_KEY, "qwen2.5:latest"),
-    "openai": ("https://api.openai.com/v1", config.OPENAI_API_KEY, "gpt-4o-mini"),
-}
-
-
-def _resolve_vendor(vendor: str):
-    return _VENDOR_ENDPOINTS.get(vendor) or _VENDOR_ENDPOINTS["ollama"]
-
-
 _client: LLMClient | None = None
 _initialized = False
 
@@ -122,14 +107,24 @@ def get_llm_client() -> LLMClient | None:
         _client = None
         return None
 
-    settings = get_settings().get("llm", {})
+    settings = get_settings().get("llm", {}) or {}
     if not settings.get("enabled", True):
         _client = None
         return None
 
-    vendor = settings.get("vendor", "dashscope")
-    base_url, api_key, default_model = _resolve_vendor(vendor)
-    model = settings.get("model") or default_model
+    # 页面设置是唯一配置来源（OpenAI 兼容协议）：直接读 base_url / api_key / model。
+    # 不再回退 .env —— 面向最终用户的产品，Key 一律在「设置中心」页面填写。
+    base_url = (settings.get("base_url") or "").strip() or config.LLM_BASE_URL
+    model = (settings.get("model") or "").strip() or config.LLM_MODEL
+    vendor = (settings.get("vendor") or "dashscope").strip()
+    api_key = (settings.get("api_key") or "").strip()
+
+    # 未填 Key 的云端厂家 → 直接降级规则模式，不发无用请求、也不去读 .env。
+    # Ollama 本地无需真实 Key，用占位即可。
+    if not api_key and vendor != "ollama":
+        _client = None
+        return None
+    api_key = api_key or "ollama"
 
     try:
         _client = OpenAILikeClient(model=model, base_url=base_url, api_key=api_key)

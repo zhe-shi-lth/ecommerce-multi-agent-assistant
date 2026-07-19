@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.lth.ecommerceagent.inventory.Inventory;
+import com.lth.ecommerceagent.inventory.InventoryRepository;
 import com.lth.ecommerceagent.order.Order;
 import com.lth.ecommerceagent.order.OrderRepository;
 import com.lth.ecommerceagent.product.Product;
@@ -31,14 +33,17 @@ public class OperationPlanController {
     private final OperationPlanRepository operationPlanRepository;
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
+    private final InventoryRepository inventoryRepository;
 
     public OperationPlanController(
             OperationPlanRepository operationPlanRepository,
             ProductRepository productRepository,
-            OrderRepository orderRepository) {
+            OrderRepository orderRepository,
+            InventoryRepository inventoryRepository) {
         this.operationPlanRepository = operationPlanRepository;
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
+        this.inventoryRepository = inventoryRepository;
     }
 
     @PostMapping
@@ -146,11 +151,49 @@ public class OperationPlanController {
     }
 
     @PostMapping("/{id}/confirm")
-    public OperationPlanResponse confirm(@PathVariable Long id) {
+    public ResponseEntity<OperationPlanResponse> confirm(@PathVariable Long id) {
         OperationPlan plan = findPlan(id);
+        Product product = plan.getProduct();
+
+        // 线2 确定性发布前审核（纯 DB 校验，不依赖外部模型）：
+        // 商品存在 + 已建库存 + 当前库存 > 安全阈值，才允许发布。
+        String auditMessage;
+        boolean auditPassed;
+        if (product == null) {
+            auditPassed = false;
+            auditMessage = "商品不存在，无法发布";
+        } else {
+            java.util.Optional<Inventory> invOpt = inventoryRepository.findByProductId(product.getId());
+            if (invOpt.isEmpty()) {
+                auditPassed = false;
+                auditMessage = "该商品尚未创建库存，请先到「库存」页建立库存后再发布";
+            } else {
+                Inventory inv = invOpt.get();
+                int current = inv.getCurrentStock() != null ? inv.getCurrentStock() : 0;
+                int threshold = inv.getSafeStockThreshold() != null ? inv.getSafeStockThreshold() : 0;
+                if (current <= threshold) {
+                    auditPassed = false;
+                    auditMessage = String.format(
+                            "库存不足：当前 %d ≤ 安全阈值 %d，请先补足库存", current, threshold);
+                } else {
+                    auditPassed = true;
+                    auditMessage = "线2 审核通过，商品已发布";
+                }
+            }
+        }
+
+        if (!auditPassed) {
+            // 审核不通过：保持 PENDING，不发布，返回 409 + 原因。
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(toResponse(plan, false, auditMessage));
+        }
+
         plan.setConfirmationStatus("CONFIRMED");
         plan.setConfirmedAt(Instant.now());
-        return toResponse(operationPlanRepository.save(plan));
+        product.setStatus("PUBLISHED");
+        productRepository.save(product);
+        OperationPlan saved = operationPlanRepository.save(plan);
+        return ResponseEntity.ok(toResponse(saved, true, auditMessage));
     }
 
     @PostMapping("/{id}/reject")
@@ -167,6 +210,16 @@ public class OperationPlanController {
         if (order != null) {
             plan.setOrder(order);
         }
+        // 平台取值优先级：请求显式指定 > 关联订单的平台 > 默认 taobao
+        String platform = request.platform();
+        if (platform == null || platform.isBlank()) {
+            if (order != null && order.getPlatform() != null) {
+                platform = order.getPlatform();
+            } else {
+                platform = "unspecified";
+            }
+        }
+        plan.setPlatform(platform);
         plan.setProductPlanJson(request.productPlanJson());
         plan.setImagePlanJson(request.imagePlanJson());
         plan.setInventoryPlanJson(request.inventoryPlanJson());
@@ -193,12 +246,17 @@ public class OperationPlanController {
     }
 
     private OperationPlanResponse toResponse(OperationPlan p) {
+        return toResponse(p, null, null);
+    }
+
+    private OperationPlanResponse toResponse(OperationPlan p, Boolean auditPassed, String auditMessage) {
         Long orderId = p.getOrder() != null ? p.getOrder().getId() : null;
         return new OperationPlanResponse(
                 p.getId(),
                 p.getTraceId(),
                 p.getProduct().getId(),
                 orderId,
+                p.getPlatform(),
                 p.getProductPlanJson(),
                 p.getImagePlanJson(),
                 p.getInventoryPlanJson(),
@@ -210,6 +268,8 @@ public class OperationPlanController {
                 p.getConfirmedAt(),
                 p.getCreatedAt(),
                 p.getUpdatedAt(),
-                p.getLine());
+                p.getLine(),
+                auditPassed,
+                auditMessage);
     }
 }

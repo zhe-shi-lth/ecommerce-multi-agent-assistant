@@ -73,6 +73,9 @@ public class OrderController {
 
     private void apply(OrderCreateRequest request, Product product, Order order) {
         order.setProduct(product);
+        if (request.platform() != null && !request.platform().isBlank()) {
+            order.setPlatform(request.platform());
+        }
         order.setQuantity(request.quantity());
         order.setStatus(request.status());
         order.setAddressComplete(request.addressComplete());
@@ -95,6 +98,7 @@ public class OrderController {
         return new OrderResponse(
                 o.getId(),
                 o.getProduct().getId(),
+                o.getPlatform(),
                 o.getQuantity(),
                 o.getStatus(),
                 o.getAddressComplete(),

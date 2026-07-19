@@ -147,6 +147,30 @@ class JavaApiClient:
             logger.error("从 Java 获取商品失败 (id={}): {}", product_id, e)
             return None
 
+    def get_inventories(self) -> list[dict]:
+        """拉取全部库存记录（Java /api/inventories），供线2 监控 Agent 使用。"""
+        url = f"{self.base_url}/api/inventories"
+        try:
+            resp = httpx.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError as e:
+            logger.error("从 Java 获取库存列表失败: {}", e)
+            return []
+
+    def list_daily_sales(self, product_id: Optional[int] = None) -> list[dict]:
+        """拉取日销记录（Java /api/daily-sales?productId=），供线2 估算实际日销。"""
+        url = f"{self.base_url}/api/daily-sales"
+        if product_id is not None:
+            url += f"?productId={product_id}"
+        try:
+            resp = httpx.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError as e:
+            logger.error("从 Java 获取日销失败 (productId={}): {}", product_id, e)
+            return []
+
     def persist_line1_plan(
         self,
         product_id: int,
@@ -178,3 +202,15 @@ class JavaApiClient:
         except httpx.HTTPError as e:
             logger.error("线1 落库运营计划到 Java 失败: {}", e)
             return None
+
+    def publish_product(self, product_id: int) -> bool:
+        """线1上架确认后，将商品标记为已发布（PUBLISHED），仅已发布商品可被平台模拟拉单。"""
+        url = f"{self.base_url}/api/products/{product_id}/publish"
+        try:
+            resp = httpx.post(url, timeout=self.timeout)
+            resp.raise_for_status()
+            logger.info("商品已发布 (id={})", product_id)
+            return True
+        except httpx.HTTPError as e:
+            logger.error("发布商品失败 (id={}): {}", product_id, e)
+            return False

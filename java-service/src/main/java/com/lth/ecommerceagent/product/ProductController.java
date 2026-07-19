@@ -56,6 +56,13 @@ public class ProductController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/{id}/publish")
+    public ProductResponse publish(@PathVariable Long id) {
+        Product product = findProduct(id);
+        product.setStatus("PUBLISHED");
+        return toResponse(productRepository.save(product));
+    }
+
     private void apply(ProductCreateRequest request, Product product) {
         product.setName(request.name());
         product.setCategory(request.category());

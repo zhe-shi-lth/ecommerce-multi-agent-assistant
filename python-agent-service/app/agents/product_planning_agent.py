@@ -1,10 +1,7 @@
 import json
-import os
 import re
 
-from app import config
 from app.llm import client as llm_client
-from app.settings_store import get_settings
 from app.schemas.agent_outputs import ProductPlan
 from app.schemas.product import ProductContext
 
@@ -61,8 +58,8 @@ class ProductPlanningAgent:
         notes: str = "",
     ) -> ProductPlan:
         platforms = _resolve_platforms(selected_platforms)
-        # 有上传商品图且已配置 DashScope key → 走视觉模型「看图 + 备注」写文案
-        if reference_image and (os.getenv("DASHSCOPE_API_KEY") or config.DASHSCOPE_API_KEY):
+        # 有上传商品图且已配置视觉模型 Key → 走多模态「看图 + 备注」写文案
+        if reference_image and self._vision_available():
             try:
                 return self._vision_run(product, knowledge, platforms, reference_image, notes)
             except Exception as e:  # noqa: BLE001
@@ -103,7 +100,7 @@ class ProductPlanningAgent:
         reference_image: str,
         notes: str,
     ) -> ProductPlan:
-        """多模态路径：把商品图 + 商品上下文 + 商家备注发给通义千问视觉模型写文案。"""
+        """多模态路径：把商品图 + 商品上下文 + 商家备注发给视觉模型写文案。"""
         from app.tools.dashscope_vl import vl_chat
 
         prompt = _SYSTEM_PROMPT.format(
@@ -121,10 +118,17 @@ class ProductPlanningAgent:
             user += f"\n\n【商家备注】\n{notes}\n请结合备注中的额外信息撰写文案。"
         if knowledge:
             user += _KNOWLEDGE_APPEND.format(knowledge)
-        vision_model = get_settings().get("vision", {}).get("model")
-        raw = vl_chat(prompt, user, reference_image, model=vision_model)
+        raw = vl_chat(prompt, user, reference_image)
         data = _extract_json(raw)
-        plan = ProductPlan.model_validate(data)
+        # 视觉模型可能只回了部分字段（如仅 seo_keywords），直接 model_validate 会因
+        # 必填字段缺失而失败、整段降级成规则。改为：以规则基线为底，叠加视觉模型给出的
+        # 有效字段，既用上"看图"成果，又保证产出是合法的完整 ProductPlan。
+        valid_fields = set(ProductPlan.model_fields.keys())
+        baseline = self._rule_based_run(product, knowledge, platforms, notes).model_dump()
+        for key, val in data.items():
+            if key in valid_fields and val not in (None, "", [], {}):
+                baseline[key] = val
+        plan = ProductPlan.model_validate(baseline)
         plan = plan.model_copy(
             update={
                 "platform_copies": self._normalize_platform_copies(
@@ -133,6 +137,14 @@ class ProductPlanningAgent:
             }
         )
         return plan
+
+    @staticmethod
+    def _vision_available() -> bool:
+        """是否已配置视觉模型 Key（足以发起「看图写文案」）。"""
+        from app.settings_store import resolve_vision_credentials
+
+        _, api_key, _ = resolve_vision_credentials()
+        return bool(api_key)
 
     @staticmethod
     def _normalize_platform_copies(raw: dict, product: ProductContext, platforms: list[str]) -> dict:

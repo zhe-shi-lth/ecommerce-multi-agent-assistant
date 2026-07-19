@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import OperationPlans from "./pages/OperationPlans";
 import OperationPlanDetail from "./pages/OperationPlanDetail";
 import Products from "./pages/Products";
@@ -8,8 +8,28 @@ import Favorites from "./pages/Favorites";
 import Dashboard from "./pages/Dashboard";
 import NewListing from "./pages/NewListing";
 import Settings from "./pages/Settings";
+import Simulator from "./pages/Simulator";
+import Login from "./pages/Login";
+import { clearToken, isAuthed } from "./auth";
 
 export default function App() {
+  const authed = isAuthed();
+
+  // 未登录：仅渲染登录页，其余一律跳转登录
+  if (!authed) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  function handleLogout() {
+    clearToken();
+    window.location.href = "/login";
+  }
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -44,6 +64,11 @@ export default function App() {
             <span className="nav-dot" />
             销售监控
           </NavLink>
+          <div className="nav-group">测试</div>
+          <NavLink to="/simulator" className="nav-link">
+            <span className="nav-dot" />
+            平台模拟
+          </NavLink>
           <div className="nav-group">结果</div>
           <NavLink to="/favorites" className="nav-link">
             <span className="nav-dot" />
@@ -55,6 +80,12 @@ export default function App() {
             设置中心
           </NavLink>
         </nav>
+        <div className="sidebar-footer">
+          <button className="nav-link" onClick={handleLogout}>
+            <span className="nav-dot" />
+            退出登录
+          </button>
+        </div>
       </aside>
       <main className="content">
         <Routes>
@@ -67,7 +98,9 @@ export default function App() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/favorites" element={<Favorites />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/simulator" element={<Simulator />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>

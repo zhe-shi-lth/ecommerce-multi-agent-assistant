@@ -1,4 +1,5 @@
 import os
+from functools import partial
 
 from dotenv import load_dotenv
 
@@ -209,9 +210,15 @@ class ImageCreativeAgent:
 
         ref_strength = float(image_settings.get("ref_strength", 0.4))
         if reference_image:
-            # 图生图：照片为底图 + 文案为修改目标（用"修改指令"提示词，避免原样返回）
+            # 图生图：照片为底图 + 文案为修改目标（用"修改指令"提示词，避免原样返回）。
+            # 用 partial 以关键字传入 ref_strength：否则位置参数会把 ref_strength 误填进
+            # size 形参（generate_image_edit 签名为 prompt/base_image_url/size=/n=/ref_strength=），
+            # 导致 size 收到浮点数、请求非法、任务 FAILED。
             prompt = self._build_edit_prompt(product, product_plan, image_plan, platforms)
-            main_url = self._generate_one(generate_image_edit, prompt, reference_image, ref_strength)
+            main_url = self._generate_one(
+                partial(generate_image_edit, ref_strength=ref_strength),
+                prompt, reference_image,
+            )
         else:
             # 文生图：仅按文案从零生成
             prompt = self._build_copy_prompt(product, product_plan, image_plan, platforms)

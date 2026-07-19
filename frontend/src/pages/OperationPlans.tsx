@@ -1,10 +1,27 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getOperationPlans } from "../api/operations";
 import type { OperationPlan } from "../api/types";
-import StatusBadge from "../components/StatusBadge";
+import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+
+const CONFIRM_LABEL: Record<string, string> = {
+  PENDING: "待你审核",
+  CONFIRMED: "已发布",
+  REJECTED: "已驳回",
+};
+
+function planTitle(p: OperationPlan): string {
+  const t = p.productPlanJson?.["recommended_title"];
+  return typeof t === "string" && t ? t : `计划 #${p.id}`;
+}
+
+function planSummary(p: OperationPlan): string {
+  const s = p.productPlanJson?.["detail_description"];
+  if (typeof s === "string" && s) return s;
+  return p.finalSummary || "（暂无摘要）";
+}
 
 export default function OperationPlans() {
   const [plans, setPlans] = useState<OperationPlan[]>([]);
@@ -19,11 +36,18 @@ export default function OperationPlans() {
       .finally(() => setLoading(false));
   }, []);
 
+  const [platform, setPlatform] = useState("ALL");
+  const filtered = useMemo(
+    () => plans.filter((p) => platformMatches(p.platform, platform)),
+    [plans, platform]
+  );
+  const pendingCount = filtered.filter((p) => (p.confirmationStatus ?? "PENDING") === "PENDING").length;
+
   return (
     <section>
       <PageHeader
         title="运营计划"
-        subtitle="所有 Agent 产出计划的总览（线一/线二），点击行查看详情与执行 trace。"
+        subtitle="Agent 自动生成的选品、创意、库存与履约方案。待你审核的计划会标记出来，点击查看详情。"
       />
       {loading && (
         <div className="loading">
@@ -38,38 +62,68 @@ export default function OperationPlans() {
         <EmptyState text="暂无运营计划。可在「新品上架」走一遍流程，或运行 demo 脚本造数。" icon="🗂" />
       )}
       {!loading && !error && plans.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th className="col-id">ID</th>
-                <th>Trace</th>
-                <th>商品</th>
-                <th>订单</th>
-                <th>状态</th>
-                <th>需人工审核</th>
-                <th>创建时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plans.map((p) => (
-                <tr key={p.id} className="row-link" onClick={() => navigate(`/operation-plans/${p.id}`)}>
-                  <td className="col-id">
-                    <Link to={`/operation-plans/${p.id}`}>{p.id}</Link>
-                  </td>
-                  <td className="mono">{p.traceId}</td>
-                  <td>{p.productId}</td>
-                  <td>{p.orderId}</td>
-                  <td>
-                    <StatusBadge status={p.status} />
-                  </td>
-                  <td>{p.manualReviewRequired ? "是" : "否"}</td>
-                  <td className="muted">{p.createdAt}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="filter-bar" style={{ marginTop: 4 }}>
+            <div className="filter-item">
+              <label className="filter-label">平台</label>
+              <select
+                className="header-select"
+                value={platform}
+                onChange={(e) => setPlatform(e.target.value)}
+              >
+                <option value="ALL">全部平台</option>
+                {PLATFORMS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {pendingCount > 0 && (
+            <div className="notice notice-warn">有 {pendingCount} 个计划待你审核确认后才会发布商品。</div>
+          )}
+          {filtered.length === 0 ? (
+            <EmptyState text="没有符合平台筛选条件的计划，试试切换平台。" icon="🔍" />
+          ) : (
+            <div className="plan-grid">
+              {filtered.map((p) => {
+                const confirm = p.confirmationStatus ?? "PENDING";
+                const pending = confirm === "PENDING";
+                const title = planTitle(p);
+                const summary = planSummary(p);
+                return (
+                  <button
+                    type="button"
+                    className={`plan-card${pending ? " plan-card-pending" : ""}`}
+                    key={p.id}
+                    onClick={() => navigate(`/operation-plans/${p.id}`)}
+                  >
+                    <div className="plan-card-head">
+                      <span className="plan-card-title">{title}</span>
+                      {pending && <span className="badge badge-warn">待你审核</span>}
+                    </div>
+                    <p className="plan-card-summary">{summary}</p>
+                    <div className="plan-card-meta">
+                      <span>确认状态：{CONFIRM_LABEL[confirm] ?? confirm}</span>
+                      <span>商品：#{p.productId}</span>
+                      <span>
+                        平台：
+                        <span className={`badge badge-${platformTone(p.platform)}`}>
+                          {platformLabel(p.platform)}
+                        </span>
+                      </span>
+                      <span className="muted">创建：{p.createdAt}</span>
+                    </div>
+                    {p.manualReviewRequired && (
+                      <div className="plan-card-flag">⚠ 需人工复核</div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </section>
   );

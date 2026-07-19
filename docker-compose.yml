@@ -43,10 +43,10 @@ services:
       context: ./python-agent-service
     container_name: ecommerce-agent-python
     restart: unless-stopped
-    # 默认规则模式（LLM_ENABLED=false）+ 关闭本地 RAG（RAG_ENABLED=false），离线可跑；
-    # 接入真实 LLM 见 README「LLM 配置」，并把 Ollama 也纳入 compose 即可。
+    # 面向最终用户发布：LLM 由「设置中心」页面配置驱动（LLM_ENABLED=true），
+    # 用户未填 Key 时自动降级规则模式；本地 RAG 默认关闭（需本地嵌入模型，按需开启）。
     environment:
-      LLM_ENABLED: "false"
+      LLM_ENABLED: "true"
       RAG_ENABLED: "false"
       JAVA_API_BASE_URL: http://java:8080
     depends_on:
