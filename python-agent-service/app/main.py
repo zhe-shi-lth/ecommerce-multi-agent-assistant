@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 import jwt
@@ -16,6 +17,10 @@ load_dotenv()
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-jwt-secret-change-me")
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "dev-service-key-change-me")
 
+# HS256 要求密钥 >= 256 位；为兼容任意长度的用户密钥，统一用 SHA-256 派生 32 字节密钥。
+# 必须与 Java 侧 JwtService 的派生方式一致（sha256(secret)），保证两端可互验令牌。
+JWT_KEY = hashlib.sha256(JWT_SECRET.encode()).digest()
+
 
 def get_current_user(
     request: Request,
@@ -30,7 +35,7 @@ def get_current_user(
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
         try:
-            return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            return jwt.decode(token, JWT_KEY, algorithms=["HS256"])
         except jwt.PyJWTError:
             raise HTTPException(status_code=401, detail="无效或过期的凭证")
     raise HTTPException(status_code=401, detail="未认证")

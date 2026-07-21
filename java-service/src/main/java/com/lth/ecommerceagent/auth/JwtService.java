@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Date;
 
 /**
@@ -24,10 +26,15 @@ public class JwtService {
     public JwtService(
             @Value("${jwt.secret}") String secret,
             @Value("${jwt.expiration-ms:86400000}") long expirationMs) {
-        // 与 Python 侧 jwt.decode(token, JWT_SECRET) 保持一致：直接用密钥的 UTF-8 字节作为
-        // HMAC-SHA256 密钥（不强制 32 字节）。使用 SecretKeySpec 而非 Keys.hmacShaKeyFor，
-        // 后者会要求密钥 >= 32 字节，过短默认值会抛 WeakKeyException 导致启动失败。
-        this.key = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        // HS256 要求密钥 >= 256 位；为兼容任意长度的用户密钥，统一用 SHA-256 派生 32 字节密钥。
+        // 必须与 Python 侧 get_current_user 的派生方式一致（sha256(secret)），保证两端可互验令牌。
+        try {
+            byte[] keyBytes = MessageDigest.getInstance("SHA-256")
+                    .digest(secret.getBytes(StandardCharsets.UTF_8));
+            this.key = new SecretKeySpec(keyBytes, "HmacSHA256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 算法不可用", e);
+        }
         this.expirationMs = expirationMs;
     }
 
