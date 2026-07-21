@@ -1,10 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { isAuthed, setToken } from "../auth";
+import { isAuthed, setRole, setToken } from "../auth";
+import { api } from "../api/client";
 import RobotMascot from "../components/RobotMascot";
 
-// 前端模拟账号（仅演示用，不接后端）。
-const DEMO = { email: "admin@shop.local", password: "admin123" };
+interface LoginResult {
+  token: string;
+  role: string;
+  email: string;
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -16,7 +20,7 @@ export default function Login() {
   // 已登录则直接进后台
   if (isAuthed()) return <Navigate to="/" replace />;
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     if (!email.trim() || !password) {
@@ -24,16 +28,18 @@ export default function Login() {
       return;
     }
     setBusy(true);
-    // 模拟网络请求，留下柔和反馈空间
-    setTimeout(() => {
-      if (email.trim() === DEMO.email && password === DEMO.password) {
-        setToken(email.trim());
-        navigate("/", { replace: true });
-      } else {
-        setError("账号或密码错误");
-        setBusy(false);
-      }
-    }, 450);
+    try {
+      const result = await api.post<LoginResult>("/auth/login", {
+        email: email.trim(),
+        password,
+      });
+      setToken(result.token);
+      setRole(result.role);
+      navigate("/", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登录失败");
+      setBusy(false);
+    }
   }
 
   return (
@@ -56,7 +62,7 @@ export default function Login() {
       <main className="login-panel">
         <div className="login-card">
           <h2 className="login-title">登录</h2>
-          <p className="login-subtitle">使用演示账号进入后台</p>
+          <p className="login-subtitle">使用账号进入后台</p>
 
           <form className="login-form" onSubmit={handleSubmit}>
             <div className="field">
@@ -87,7 +93,9 @@ export default function Login() {
           </form>
 
           <p className="login-hint">
-            演示账号：<code>admin@shop.local</code> / <code>admin123</code>
+            超级管理员：<code>admin@shop.local</code> / <code>admin123</code>
+            <br />
+            普通用户：<code>user@shop.local</code> / <code>user123</code>
           </p>
         </div>
       </main>

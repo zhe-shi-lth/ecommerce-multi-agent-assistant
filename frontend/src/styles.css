@@ -1692,3 +1692,31 @@ select.header-select {
     padding: 24px 16px;
   }
 }
+
+/* 启动校验令牌时的全屏加载态 */
+.boot-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-2);
+  background: var(--bg, #0f1115);
+}
+
+.boot-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border, #2a2f3a);
+  border-top-color: var(--accent, #4f8cff);
+  border-radius: 50%;
+  animation: boot-spin 0.8s linear infinite;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

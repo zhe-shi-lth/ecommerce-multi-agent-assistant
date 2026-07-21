@@ -4,7 +4,7 @@ from app.main import app
 
 
 def test_health_endpoint_returns_service_status():
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Service-Key": "dev-service-key-change-me"})
 
     response = client.get("/health")
 

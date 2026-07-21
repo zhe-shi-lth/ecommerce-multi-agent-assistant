@@ -1,5 +1,6 @@
-// 前端-only 模拟鉴权：令牌存于 localStorage，不牵涉后端。
+// 鉴权状态：令牌与角色存于 localStorage，令牌由后端签发（JWT）。
 const TOKEN_KEY = "ea_token";
+const ROLE_KEY = "ea_role";
 
 export function getToken(): string | null {
   try {
@@ -17,9 +18,26 @@ export function setToken(value: string): void {
   }
 }
 
+export function getRole(): string | null {
+  try {
+    return localStorage.getItem(ROLE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setRole(value: string): void {
+  try {
+    localStorage.setItem(ROLE_KEY, value);
+  } catch {
+    /* 忽略 */
+  }
+}
+
 export function clearToken(): void {
   try {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(ROLE_KEY);
   } catch {
     /* 忽略 */
   }
@@ -27,4 +45,8 @@ export function clearToken(): void {
 
 export function isAuthed(): boolean {
   return !!getToken();
+}
+
+export function isSuperAdmin(): boolean {
+  return getRole() === "SUPER_ADMIN";
 }

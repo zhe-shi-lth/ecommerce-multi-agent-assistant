@@ -4,7 +4,7 @@ from app.main import app
 
 
 def test_operation_plan_api_returns_multi_agent_result():
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Service-Key": "dev-service-key-change-me"})
 
     response = client.post(
         "/agent/ecommerce/operation-plan",

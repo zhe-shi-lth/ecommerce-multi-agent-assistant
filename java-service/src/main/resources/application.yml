@@ -23,3 +23,12 @@ python:
     base-url: ${PYTHON_AGENT_BASE_URL:http://localhost:8000}
     connect-timeout-ms: 10000
     read-timeout-ms: 120000
+
+# 鉴权配置
+jwt:
+  # 与 Python 服务共用同一密钥（来自 .env 的 JWT_SECRET），HS256 签发/校验
+  secret: ${JWT_SECRET:dev-jwt-secret-change-me}
+  expiration-ms: 86400000
+# 服务间调用密钥（Python <-> Java 双向闭环的写回/编排调用使用 X-Service-Key 头）
+service:
+  api-key: ${SERVICE_API_KEY:dev-service-key-change-me}

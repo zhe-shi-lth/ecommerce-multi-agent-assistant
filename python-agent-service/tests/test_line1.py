@@ -26,7 +26,7 @@ _PATCHES = (
 def _client():
     for p in _PATCHES:
         p.start()
-    return TestClient(app)
+    return TestClient(app, headers={"X-Service-Key": "dev-service-key-change-me"})
 
 
 def _stop():

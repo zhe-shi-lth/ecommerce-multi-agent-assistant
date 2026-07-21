@@ -1,12 +1,23 @@
 // 轻量 fetch 封装：开发期经 Vite proxy 走相对前缀（/api 或 /agent），无需写死后端地址。
+import { clearToken, getToken } from "../auth";
+
 async function requestWithPrefix<T>(prefix: string, path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  // 携带后端签发的 JWT（Bearer），用于 Java 与 Python 双侧鉴权。
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
   const res = await fetch(`${prefix}${path}`, { ...init, headers });
   if (!res.ok) {
+    // 令牌失效（过期/无效）：清空本地状态并跳回登录页（登录接口本身的 401 不跳转，留待页面提示）。
+    if (res.status === 401 && !path.includes("/auth/login")) {
+      clearToken();
+      window.location.href = "/login";
+    }
     // 优先提取后端在 4xx body 里给出的可读原因（error/message/auditMessage），
     // 命中时直接作为错误消息（不含状态码、无前缀），更适合直接展示给最终用户。
     let statusText = `请求失败 ${res.status}`;
