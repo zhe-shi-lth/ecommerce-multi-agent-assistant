@@ -1720,3 +1720,26 @@ select.header-select {
     transform: rotate(360deg);
   }
 }
+
+/* 顶层错误边界：渲染异常时的可读提示（替代白屏） */
+.error-boundary {
+  max-width: 880px;
+  margin: 48px auto;
+  padding: 24px;
+  color: var(--text, #e6e8ee);
+}
+.error-boundary h2 {
+  margin-top: 0;
+}
+.error-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 12px 0;
+}
