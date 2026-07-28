@@ -1,3 +1,5 @@
+from typing import Optional
+
 from app.agents.forecast import compute_forecast
 from app.llm import client as llm_client
 from app.schemas.agent_outputs import InventoryPlan
@@ -44,7 +46,22 @@ def _forecast_summary(forecast) -> str:
 
 
 class InventoryPurchaseAgent:
-    def run(self, inventory: InventoryContext, order: OrderContext) -> InventoryPlan:
+    def run(
+        self, inventory: InventoryContext, order: Optional[OrderContext] = None
+    ) -> InventoryPlan:
+        # 主动补货场景（线2 补货清单）无关联订单：用零数量订单兜底，
+        # 让确定性内核只按"库存 + 前置期 + 安全库存"推算补货量。
+        if order is None:
+            order = OrderContext(
+                order_id=0,
+                product_id=inventory.product_id,
+                quantity=0,
+                status="NONE",
+                address_complete=True,
+                paid=True,
+                manual_review_required=False,
+                fulfillment_suggestion_status="NONE",
+            )
         # 确定性预测始终计算，作为规则与 LLM 共用的权威数字。
         forecast = compute_forecast(inventory, order)
         client = llm_client.get_llm_client()

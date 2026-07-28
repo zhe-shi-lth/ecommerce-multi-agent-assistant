@@ -218,3 +218,40 @@ class JavaApiClient:
         except httpx.HTTPError as e:
             logger.error("发布商品失败 (id={}): {}", product_id, e)
             return False
+
+    def persist_restock_plan(
+        self,
+        product_id: int,
+        inventory_plan: dict,
+        final_summary: str,
+        platform: str = "ALL",
+    ) -> Optional[int]:
+        """线2 闭环：落库一条"补货计划清单"（仅含库存补货建议，line=LINE2_RESTOCK）。
+
+        由 `InventoryMonitorAgent` 检测到 WARN 后触发，给商家一份可审核的补货清单；
+        平台记 "ALL"（库存监控为商品级、跨平台），避免产生"未指定"分类。
+        """
+        url = f"{self.base_url}/api/operation-plans"
+        payload = {
+            "traceId": f"line2_restock_{uuid4().hex}",
+            "productId": product_id,
+            "orderId": None,
+            "productPlanJson": {},
+            "imagePlanJson": {},
+            "inventoryPlanJson": inventory_plan,
+            "fulfillmentPlanJson": {},
+            "finalSummary": final_summary,
+            "manualReviewRequired": True,
+            "status": "SUCCESS",
+            "line": "LINE2_RESTOCK",
+            "platform": platform,
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp.raise_for_status()
+            op_id = resp.json().get("id")
+            logger.info("线2 补货计划清单已落库 Java (id={}, product={})", op_id, product_id)
+            return op_id
+        except httpx.HTTPError as e:
+            logger.error("线2 落库补货计划到 Java 失败 (product={}): {}", product_id, e)
+            return None

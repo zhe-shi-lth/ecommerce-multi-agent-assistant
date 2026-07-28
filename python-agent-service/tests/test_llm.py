@@ -1,3 +1,5 @@
+import pytest
+
 from app.agents.image_creative_agent import ImageCreativeAgent
 from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
 from app.agents.order_fulfillment_agent import OrderFulfillmentAgent
@@ -112,28 +114,18 @@ def test_agents_use_llm_client_when_enabled(monkeypatch):
     assert isinstance(fulfillment_plan, FulfillmentPlan)
 
 
-def test_supervisor_degrades_on_llm_failure(monkeypatch):
+def test_supervisor_raises_on_llm_failure(monkeypatch):
     class FailingClient(LLMClient):
         def generate(self, system, user, schema):
             raise RuntimeError("ollama unavailable")
 
     monkeypatch.setattr("app.llm.client.get_llm_client", lambda: FailingClient())
 
-    result = SupervisorAgent().run(
-        product=_sample_product(),
-        inventory=_sample_inventory(),
-        order=_sample_order(),
-        trigger_type="GENERATE_OPERATION_PLAN",
-    )
-
-    # 每个子 Agent 都应记录一次失败，并写入 errors。
-    failed = [r for r in result.agent_runs if r.status == "FAILED"]
-    assert len(failed) == 4
-    assert len(result.errors) == 4
-    assert all(r.error_message for r in failed)
-
-    # 降级后整条链路仍产出有效计划（规则 fallback）。
-    assert result.product_plan.recommended_title
-    assert result.image_plan.main_image_prompt
-    assert result.inventory_plan.should_restock is True
-    assert result.fulfillment_plan.can_ship is True
+    # 选中了 LLM 但调用持续失败 → 如实抛错（不降级到规则实现）。
+    with pytest.raises(RuntimeError):
+        SupervisorAgent().run(
+            product=_sample_product(),
+            inventory=_sample_inventory(),
+            order=_sample_order(),
+            trigger_type="GENERATE_OPERATION_PLAN",
+        )

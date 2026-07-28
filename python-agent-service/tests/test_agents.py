@@ -1,8 +1,11 @@
+import pytest
+
 from app.agents.image_creative_agent import ImageCreativeAgent
 from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
 from app.agents.order_fulfillment_agent import OrderFulfillmentAgent
 from app.agents.product_planning_agent import ProductPlanningAgent
 from app.agents.supervisor_agent import SupervisorAgent
+from app.errors import ConfigError
 from app.llm import client as llm_client
 from app.llm.client import StubClient
 from app.schemas.agent_outputs import (
@@ -70,9 +73,8 @@ def test_product_planning_agent_generates_listing_plan():
 
 def test_image_creative_agent_uses_product_selling_points():
     product = sample_product()
-    product_plan = ProductPlanningAgent().run(product)
 
-    image_plan = ImageCreativeAgent().run(product, product_plan)
+    image_plan = ImageCreativeAgent().run(product, notes="测试备注")
 
     assert "便携式榨汁杯" in image_plan.main_image_prompt
     assert "办公室" in image_plan.scene_image_prompt
@@ -123,10 +125,9 @@ def test_image_creative_agent_llm_review_attached(monkeypatch):
         raise AssertionError(f"unexpected schema {schema}")
 
     product = sample_product()
-    product_plan = ProductPlanningAgent().run(product)  # 规则路径，先于 monkeypatch
 
     monkeypatch.setattr(llm_client, "get_llm_client", lambda: StubClient(factory))
-    image_plan = ImageCreativeAgent().run(product, product_plan)
+    image_plan = ImageCreativeAgent().run(product, notes="测试备注")
 
     assert image_plan.image_review_result is not None
     assert image_plan.image_review_result.reviewer == "llm"
@@ -282,18 +283,17 @@ def test_supervisor_retries_transient_llm_failure(monkeypatch):
     assert all(run.status == "SUCCESS" for run in result.agent_runs if run.agent_name != "SUPERVISOR_AGENT")
 
 
-def test_supervisor_degrades_to_rule_on_persistent_failure(monkeypatch):
-    monkeypatch.setattr(llm_client, "get_llm_client", lambda: _AlwaysFailClient())
+def test_supervisor_raises_config_error_when_vendor_misconfigured(monkeypatch):
+    def boom():
+        raise ConfigError("LLM 已选择厂家「dashscope」但未填写 API Key（测试）")
 
-    result = SupervisorAgent().run(
-        product=sample_product(),
-        inventory=sample_low_inventory(),
-        order=sample_paid_order(),
-        trigger_type="GENERATE_OPERATION_PLAN",
-    )
-    # 多次失败仍降级到规则实现，主链路不中断（产出有效 plan）
-    assert result.errors  # 记录了失败
-    assert result.product_plan is not None
-    assert result.product_plan.recommended_title  # 规则路径仍产出
-    assert result.image_plan is not None
-    assert result.fulfillment_plan is not None
+    monkeypatch.setattr(llm_client, "get_llm_client", boom)
+
+    # 配置缺失（未填 Key 的云端厂家）必须如实抛错，不降级到规则实现。
+    with pytest.raises(ConfigError):
+        SupervisorAgent().run(
+            product=sample_product(),
+            inventory=sample_low_inventory(),
+            order=sample_paid_order(),
+            trigger_type="GENERATE_OPERATION_PLAN",
+        )

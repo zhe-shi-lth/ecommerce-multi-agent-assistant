@@ -61,7 +61,7 @@ def test_line1_full_flow_no_product_creation():
             ).json()
             ip = client.post(
                 "/agent/ecommerce/line1/image-plan",
-                json={"product_id": 10, "platforms": ["xiaohongshu"], "product_plan": pp},
+                json={"product_id": 10, "platforms": ["xiaohongshu"], "notes": "测试备注"},
             ).json()
             fin = client.post(
                 "/agent/ecommerce/line1/finalize",

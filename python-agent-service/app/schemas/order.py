@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class OrderContext(BaseModel):
     order_id: int
     product_id: int
-    quantity: int = Field(gt=0)
+    quantity: int = Field(ge=0)
     status: str
     address_complete: bool
     paid: bool
