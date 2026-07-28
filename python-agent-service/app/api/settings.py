@@ -1,69 +1,102 @@
 """设置中心接口：读取/保存运行时配置（持久化到 settings.json）。
 
-- GET  /agent/ecommerce/settings  -> 当前设置
-- PUT  /agent/ecommerce/settings  -> 部分更新（补丁）并返回保存后的完整设置
-仅保存「厂家 / 模型名 / 开关 / 图文比重」等 UI 可控项；凭证（API key / base_url）仍在 .env。
+- GET  /agent/ecommerce/settings        -> 当前设置
+- GET  /agent/ecommerce/model-catalog   -> 厂家+模型目录（前端据此渲染下拉，base_url 由目录派生）
+- GET  /agent/ecommerce/capabilities     -> 各能力当前是否可用
+- PUT  /agent/ecommerce/settings         -> 部分更新（补丁）并返回保存后的完整设置
+
+校验原则（对应「选厂家 + 选模型」而非手填模型名）：
+- 已知厂家的 model 必须在目录模型列表内；base_url 强制用目录派生值（不接受手填），
+  从根本上杜绝 happyhorse 等视频模型被错配到 OpenAI 兼容端点导致 404。
+- 仅 "custom" 厂家允许手填 base_url + 模型名。
+- 凭证（API key / base_url）仅来自页面设置中心，不读 .env。
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app import model_catalog
 from app.settings_store import DEFAULT_SETTINGS, capabilities, get_settings, save_settings
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["settings"])
 
-_LLM_VENDORS = ["dashscope", "ollama", "openai"]
-_VISION_VENDORS = ["dashscope"]
+_CAPABILITIES = ("llm", "image", "video", "monitor")
 
 
 class SettingsPatch(BaseModel):
     llm: dict | None = Field(default=None)
-    vision: dict | None = Field(default=None)
     image: dict | None = Field(default=None)
+    video: dict | None = Field(default=None)
+    monitor: dict | None = Field(default=None)
     image_review_enabled: bool | None = Field(default=None)
     rag_enabled: bool | None = Field(default=None)
 
 
 def _validate(patch: dict) -> dict:
-    """就地校验并规整补丁；非法字段抛 HTTPException。"""
-    llm = patch.get("llm")
-    if isinstance(llm, dict):
-        if "vendor" in llm and llm["vendor"] not in _LLM_VENDORS:
-            raise HTTPException(status_code=400, detail=f"llm.vendor 必须是 {_LLM_VENDORS}")
-        if "model" in llm and not isinstance(llm["model"], str):
-            raise HTTPException(status_code=400, detail="llm.model 必须是字符串")
+    """就地校验并规整补丁；非法字段抛 HTTPException。
 
-    vision = patch.get("vision")
-    if isinstance(vision, dict):
-        if "vendor" in vision and vision["vendor"] not in _VISION_VENDORS:
-            raise HTTPException(status_code=400, detail=f"vision.vendor 必须是 {_VISION_VENDORS}")
-        if "model" in vision and not isinstance(vision["model"], str):
-            raise HTTPException(status_code=400, detail="vision.model 必须是字符串")
+    已知厂家：model 必须在目录内（patch 未带 vendor 时按当前厂家校验），base_url 强制用目录派生；
+    custom：base_url 必填。从根上杜绝把视频模型错配到 OpenAI 兼容端点。
+    """
+    current_settings = get_settings()
+    for cap in _CAPABILITIES:
+        block = patch.get(cap)
+        if not isinstance(block, dict):
+            continue
 
-    image = patch.get("image")
-    if isinstance(image, dict):
-        if "enabled" in image and not isinstance(image["enabled"], bool):
-            raise HTTPException(status_code=400, detail="image.enabled 必须是布尔")
-        if "model" in image and not isinstance(image["model"], str):
-            raise HTTPException(status_code=400, detail="image.model 必须是字符串")
-        if "edit_model" in image and not isinstance(image["edit_model"], str):
-            raise HTTPException(status_code=400, detail="image.edit_model 必须是字符串")
-        if "ref_strength" in image:
-            rs = image["ref_strength"]
+        if "enabled" in block and not isinstance(block["enabled"], bool):
+            raise HTTPException(status_code=400, detail=f"{cap}.enabled 必须是布尔")
+        if "model" in block and not isinstance(block["model"], str):
+            raise HTTPException(status_code=400, detail=f"{cap}.model 必须是字符串")
+        if "edit_model" in block and not isinstance(block["edit_model"], str):
+            raise HTTPException(status_code=400, detail=f"{cap}.edit_model 必须是字符串")
+        if cap == "image" and "ref_strength" in block:
+            rs = block["ref_strength"]
             if not isinstance(rs, (int, float)) or not (0.0 <= float(rs) <= 1.0):
                 raise HTTPException(status_code=400, detail="image.ref_strength 必须在 0~1 之间")
+
+        # 有效厂家：patch 带了 vendor 用 patch 的，否则用当前设置的 vendor。
+        vendor = block.get("vendor")
+        if vendor is None:
+            default_vendor = "qwen" if cap == "image" else "dashscope"
+            vendor = (current_settings.get(cap, {}) or {}).get("vendor") or default_vendor
+
+        if "vendor" in block and not model_catalog.is_known_vendor(cap, vendor):
+            allowed = list(model_catalog.CATALOG[cap].keys())
+            raise HTTPException(status_code=400, detail=f"{cap}.vendor 必须是 {allowed}")
+
+        if vendor != "custom":
+            if "model" in block and not model_catalog.validate_selection(cap, vendor, block["model"]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{cap}.model 不在「{vendor}」支持的模型列表内，请从下拉选择",
+                )
+            # 已知厂家：base_url 强制派生，忽略手填
+            block["base_url"] = model_catalog.resolve_base_url(
+                cap, vendor, block.get("model") or (current_settings.get(cap, {}) or {}).get("model", "")
+            )
+        else:
+            # custom：base_url 必填（视频/出图等必须知道端点）
+            if "base_url" in block and not str(block["base_url"]).strip():
+                raise HTTPException(status_code=400, detail=f"{cap}.base_url 不能为空（自定义厂家需填写端点）")
 
     for key in ("image_review_enabled", "rag_enabled"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(status_code=400, detail=f"{key} 必须是布尔")
 
     # 仅保留已知键，避免写入无关字段
-    allowed = set(DEFAULT_SETTINGS.keys())
+    allowed = set(DEFAULT_SETTINGS.keys()) | {"image_review_enabled", "rag_enabled"}
     return {k: v for k, v in patch.items() if k in allowed}
 
 
 @router.get("/settings")
 def get_settings_endpoint() -> dict:
     return get_settings()
+
+
+@router.get("/model-catalog")
+def model_catalog_endpoint() -> dict:
+    """厂家+模型目录：前端据此渲染下拉，每个模型条目含 label / api_style / 派生 base_url。"""
+    return model_catalog.get_catalog()
 
 
 @router.get("/capabilities")

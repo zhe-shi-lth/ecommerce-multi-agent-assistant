@@ -5,6 +5,7 @@ import type { OperationPlan } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 const CONFIRM_LABEL: Record<string, string> = {
   PENDING: "待你审核",
@@ -13,11 +14,17 @@ const CONFIRM_LABEL: Record<string, string> = {
 };
 
 function planTitle(p: OperationPlan): string {
+  if (p.line === "LINE2_RESTOCK") {
+    return `补货计划清单 · 商品 #${p.productId}`;
+  }
   const t = p.productPlanJson?.["recommended_title"];
   return typeof t === "string" && t ? t : `计划 #${p.id}`;
 }
 
 function planSummary(p: OperationPlan): string {
+  if (p.line === "LINE2_RESTOCK") {
+    return p.finalSummary || "（补货计划清单）";
+  }
   const s = p.productPlanJson?.["detail_description"];
   if (typeof s === "string" && s) return s;
   return p.finalSummary || "（暂无摘要）";
@@ -37,8 +44,11 @@ export default function OperationPlans() {
   }, []);
 
   const [platform, setPlatform] = useState("ALL");
+
+  // 线2 补货清单为商品级（跨平台库存监控），不受平台筛选限制，始终纳入。
+  const isRestock = (p: OperationPlan) => p.line === "LINE2_RESTOCK";
   const filtered = useMemo(
-    () => plans.filter((p) => platformMatches(p.platform, platform)),
+    () => plans.filter((p) => isRestock(p) || platformMatches(p.platform, platform)),
     [plans, platform]
   );
   const pendingCount = filtered.filter((p) => (p.confirmationStatus ?? "PENDING") === "PENDING").length;
@@ -48,6 +58,7 @@ export default function OperationPlans() {
       <PageHeader
         title="运营计划"
         subtitle="Agent 自动生成的选品、创意、库存与履约方案。待你审核的计划会标记出来，点击查看详情。"
+        icon={<Icon name="plans" />}
       />
       {loading && (
         <div className="loading">
@@ -92,6 +103,7 @@ export default function OperationPlans() {
                 const pending = confirm === "PENDING";
                 const title = planTitle(p);
                 const summary = planSummary(p);
+                const restock = p.line === "LINE2_RESTOCK";
                 return (
                   <button
                     type="button"
@@ -101,18 +113,24 @@ export default function OperationPlans() {
                   >
                     <div className="plan-card-head">
                       <span className="plan-card-title">{title}</span>
-                      {pending && <span className="badge badge-warn">待你审核</span>}
+                      {restock ? (
+                        <span className="badge badge-info">补货计划清单</span>
+                      ) : (
+                        pending && <span className="badge badge-warn">待你审核</span>
+                      )}
                     </div>
                     <p className="plan-card-summary">{summary}</p>
                     <div className="plan-card-meta">
                       <span>确认状态：{CONFIRM_LABEL[confirm] ?? confirm}</span>
                       <span>商品：#{p.productId}</span>
-                      <span>
-                        平台：
-                        <span className={`badge badge-${platformTone(p.platform)}`}>
-                          {platformLabel(p.platform)}
+                      {!restock && (
+                        <span>
+                          平台：
+                          <span className={`badge badge-${platformTone(p.platform)}`}>
+                            {platformLabel(p.platform)}
+                          </span>
                         </span>
-                      </span>
+                      )}
                       <span className="muted">创建：{p.createdAt}</span>
                     </div>
                     {p.manualReviewRequired && (

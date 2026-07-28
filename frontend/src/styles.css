@@ -21,6 +21,7 @@
   --accent-hover: #e51e38;
   --accent-weak: #fff0f2;
   --accent-border: #ffd5dc;
+  --accent-grad: linear-gradient(135deg, #ff2442 0%, #ff5b6e 100%);
 
   /* 状态 */
   --ok: #18a058;
@@ -33,15 +34,17 @@
   --good-weak: #e7f6ee;
 
   /* 圆角 */
-  --r-sm: 6px;
-  --r: 10px;
-  --r-lg: 14px;
+  --r-sm: 8px;
+  --r: 12px;
+  --r-lg: 16px;
+  --r-md: 12px;
 
-  /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.04), 0 1px 3px rgba(20, 23, 28, 0.06);
-  --shadow-md: 0 4px 16px rgba(20, 23, 28, 0.08);
+  /* 阴影（更柔和的层叠投影） */
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.04), 0 2px 8px rgba(20, 23, 28, 0.05);
+  --shadow-md: 0 8px 28px rgba(20, 23, 28, 0.10);
+  --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.18);
 
-  --sidebar-w: 224px;
+  --sidebar-w: 236px;
 }
 
 * {
@@ -60,7 +63,10 @@ body {
   font-size: 14px;
   line-height: 1.55;
   color: var(--text);
-  background: var(--bg);
+  background:
+    radial-gradient(1100px 520px at 88% -8%, rgba(255, 36, 66, 0.05), transparent 60%),
+    radial-gradient(900px 500px at 0% 0%, rgba(255, 120, 90, 0.04), transparent 55%),
+    var(--bg);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -91,45 +97,48 @@ h4 {
   flex-shrink: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
-  padding: 20px 14px;
+  padding: 18px 14px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   position: sticky;
   top: 0;
   height: 100vh;
+  box-shadow: 1px 0 0 rgba(20, 23, 28, 0.02);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   font-size: 16px;
   font-weight: 700;
-  margin: 0 0 18px;
-  padding: 0 6px;
+  margin: 0 0 16px;
+  padding: 6px 8px 14px;
   color: var(--text);
+  border-bottom: 1px solid var(--border);
 }
 .brand-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #ff7a59);
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--accent-grad);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 12px rgba(255, 36, 66, 0.32);
+  flex-shrink: 0;
 }
 
 .nav-group {
   font-size: 11px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--text-3);
   text-transform: uppercase;
-  padding: 14px 10px 6px;
+  padding: 16px 12px 6px;
 }
 .nav-group:first-of-type {
   padding-top: 4px;
@@ -138,8 +147,8 @@ h4 {
 .nav-link {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
+  gap: 11px;
+  padding: 10px 12px;
   border-radius: var(--r-sm);
   color: var(--text-2);
   text-decoration: none;
@@ -147,39 +156,45 @@ h4 {
   position: relative;
   transition: background 0.15s, color 0.15s;
 }
+.nav-link svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: opacity 0.15s, transform 0.15s;
+}
 .nav-link:hover {
   background: var(--surface-2);
   color: var(--text);
   text-decoration: none;
+}
+.nav-link:hover svg {
+  opacity: 1;
 }
 .nav-link.active {
   background: var(--accent-weak);
   color: var(--accent);
   font-weight: 600;
 }
+.nav-link.active svg {
+  opacity: 1;
+}
 .nav-link.active::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
+  top: 9px;
+  bottom: 9px;
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--accent);
 }
-.nav-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.5;
-}
 
 .content {
   flex: 1;
-  padding: 28px 34px 48px;
+  padding: 30px 38px 56px;
   overflow: auto;
-  max-width: 1180px;
+  max-width: 1200px;
 }
 
 /* ============================ 页面头 ============================ */
@@ -188,7 +203,29 @@ h4 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 22px;
+  margin-bottom: 24px;
+}
+.page-header-lead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.page-header-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.page-header-icon svg {
+  width: 23px;
+  height: 23px;
 }
 .page-header-text h2 {
   margin: 0;
@@ -213,7 +250,7 @@ h4 {
   border: 1px solid var(--border);
   border-radius: var(--r);
   box-shadow: var(--shadow-sm);
-  padding: 18px 20px;
+  padding: 20px 22px;
   margin-bottom: 18px;
 }
 .card-header {
@@ -267,13 +304,15 @@ h4 {
   cursor: not-allowed;
 }
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-grad);
+  border-color: transparent;
   color: #fff;
+  box-shadow: 0 4px 12px rgba(255, 36, 66, 0.22);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  border-color: transparent;
+  box-shadow: 0 6px 16px rgba(255, 36, 66, 0.30);
 }
 .btn-primary:focus-visible {
   box-shadow: 0 0 0 3px var(--accent-border);
@@ -405,16 +444,19 @@ table {
 th,
 td {
   text-align: left;
-  padding: 12px 16px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--border);
 }
 th {
+  position: sticky;
+  top: 0;
   background: var(--surface-2);
   font-weight: 600;
   color: var(--text-2);
   font-size: 12.5px;
   letter-spacing: 0.01em;
   white-space: nowrap;
+  z-index: 1;
 }
 tbody tr {
   transition: background 0.12s;
@@ -526,6 +568,11 @@ th.col-id {
   border-color: #bfe6cf;
   color: var(--good);
 }
+.notice-info {
+  background: #eef4ff;
+  border-color: #cfe0ff;
+  color: #2451c4;
+}
 .notice-warn {
   background: #fff7e6;
   border-color: #f3d28a;
@@ -550,22 +597,23 @@ th.col-id {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 48px 20px;
+  gap: 10px;
+  padding: 56px 20px;
   color: var(--text-3);
   text-align: center;
 }
 .empty-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
+  font-size: 26px;
   margin-bottom: 4px;
+  color: var(--text-3);
 }
 .empty-text {
   font-size: 14px;
@@ -587,10 +635,41 @@ th.col-id {
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
+.loading-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 自定义滚动条（仅 WebKit），弱化默认粗条，提升精致感 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d8de;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #b9bfc7;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* ============================ JSON 视图 ============================ */
@@ -769,7 +848,7 @@ details > .json-view {
 }
 .plan-card:hover {
   border-color: var(--accent);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-md);
   transform: translateY(-2px);
 }
 .plan-card-pending {
@@ -987,9 +1066,10 @@ details > .json-view {
 }
 
 .stock-bar {
+  position: relative;
   display: inline-block;
-  width: 120px;
-  height: 8px;
+  width: 160px;
+  height: 10px;
   background: #eef0f3;
   border-radius: 999px;
   overflow: hidden;
@@ -999,6 +1079,15 @@ details > .json-view {
 .stock-fill {
   height: 100%;
   border-radius: 999px;
+}
+.stock-threshold {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: #111827;
+  transform: translateX(-1px);
+  pointer-events: none;
 }
 .stock-fill.ok {
   background: var(--ok);
@@ -1527,7 +1616,13 @@ select.header-select {
 }
 .sidebar-footer .nav-link:hover {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--accent);
+}
+.sidebar-footer .nav-link svg {
+  color: var(--text-3);
+}
+.sidebar-footer .nav-link:hover svg {
+  color: var(--accent);
 }
 
 /* 登录页（前端模拟鉴权） */

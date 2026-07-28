@@ -3,7 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { getOperationPlans, listDailySales } from "../api/operations";
 import { getInventories } from "../api/inventories";
 import { getProducts } from "../api/products";
-import { getInventoryWarnings } from "../api/line2";
+import { getInventoryWarnings, generateRestockPlans } from "../api/line2";
+import { getCapabilities } from "../api/settings";
+import { Icon } from "../components/icons";
 import type { DailySales, Inventory, InventoryWarning, OperationPlan, Product } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches } from "../platforms";
 import LineChart from "../components/LineChart";
@@ -29,9 +31,16 @@ export default function Dashboard() {
   const [inventories, setInventories] = useState<Inventory[]>([]);
   const [plans, setPlans] = useState<OperationPlan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // 预警板块（可选大模型）：独立加载，不阻塞上方的监控面板。
   const [warnings, setWarnings] = useState<InventoryWarning[]>([]);
+  const [warnLoading, setWarnLoading] = useState(true);
+  const [warnError, setWarnError] = useState<string | null>(null);
+  // 大模型能力探测：决定预警板块显示「智能预警」还是「红线模式」。
+  const [monitorAvailable, setMonitorAvailable] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [restockMsg, setRestockMsg] = useState<string | null>(null);
 
   // 销售趋势板块：下拉切换 营业额 / 销量
   const [trendMetric, setTrendMetric] = useState<Metric>("revenue");
@@ -41,28 +50,62 @@ export default function Dashboard() {
   // 平台筛选：影响大盘 KPI、销售趋势、单品分析（库存类看板为商品级、保持全平台）
   const [platform, setPlatform] = useState<string>("ALL");
 
+  // ① 监控面板：仅依赖 Java 业务数据，独立加载且永远秒开。
   useEffect(() => {
-    Promise.all([
-      listDailySales(),
-      getInventories(),
-      getOperationPlans(),
-      getProducts(),
-      getInventoryWarnings(),
-    ])
-      .then(([s, inv, ps, ps2, w]) => {
+    Promise.all([listDailySales(), getInventories(), getOperationPlans(), getProducts()])
+      .then(([s, inv, ps, ps2]) => {
         setSales(s);
         setInventories(inv);
         setPlans(ps);
         setProducts(ps2);
-        setWarnings(w);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
 
+  // ② 监控大模型能力探测（Python，纯本地判定、瞬间返回，不阻塞面板）。
+  useEffect(() => {
+    getCapabilities()
+      .then((c) => setMonitorAvailable(c?.monitor?.available ?? false))
+      .catch(() => setMonitorAvailable(false));
+  }, []);
+
+  // ③ 库存预警（Python，独立加载；大模型不可用则走红线降级，仍显示警告）。
+  useEffect(() => {
+    setWarnLoading(true);
+    setWarnError(null);
+    getInventoryWarnings()
+      .then(setWarnings)
+      .catch((e) => setWarnError(String(e)))
+      .finally(() => setWarnLoading(false));
+  }, []);
+
   function productName(id: number): string {
     const p = products.find((x) => x.id === id);
     return p ? p.name : `#${id}`;
+  }
+
+  async function handleGenerateRestock() {
+    setGenerating(true);
+    setRestockMsg(null);
+    try {
+      const res = await generateRestockPlans();
+      const { generated, failed } = res;
+      if (generated > 0) {
+        setRestockMsg(
+          `已生成 ${generated} 条补货计划清单，可在「运营计划」中查看并审核。` +
+            (failed.length > 0 ? `（${failed.length} 条落库失败）` : "")
+        );
+      } else if (failed.length > 0) {
+        setRestockMsg(`生成失败：${failed.length} 条落库异常，请检查后端与 Java 服务。`);
+      } else {
+        setRestockMsg("当前预警商品无需补货（已按安全库存覆盖），未生成清单。");
+      }
+    } catch (e) {
+      setRestockMsg(`生成失败：${String(e)}`);
+    } finally {
+      setGenerating(false);
+    }
   }
 
   const pendingReview = plans.filter((p) => p.confirmationStatus === "PENDING");
@@ -104,7 +147,11 @@ export default function Dashboard() {
 
   return (
     <section>
-      <PageHeader title="销售监控" subtitle="数据大盘、单品趋势与库存预警一览。" />
+      <PageHeader
+        title="销售监控"
+        subtitle="数据大盘、单品趋势与库存预警一览。"
+        icon={<Icon name="dashboard" />}
+      />
 
       <div className="filter-bar" style={{ marginTop: 4 }}>
         <div className="filter-item">
@@ -217,12 +264,47 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* 警告板块 */}
+      {/* 警告板块：可选大模型，独立加载，降级不阻塞面板 */}
       <div className="card">
         <div className="card-header">
           <h3>库存预警</h3>
+          <span
+            className={`badge ${monitorAvailable ? "badge-info" : "badge-warn"}`}
+            title={
+              monitorAvailable === null
+                ? "正在检测监控大模型能力…"
+                : monitorAvailable
+                ? "已启用监控大模型：预警含未来事件智能判断"
+                : "未启用监控大模型：按可售天数 < 5 天红线预警"
+            }
+          >
+            {monitorAvailable === null
+              ? "检测中…"
+              : monitorAvailable
+              ? "智能预警"
+              : "红线模式"}
+          </span>
+          {warnings.length > 0 && (
+            <button
+              className="btn btn-primary"
+              onClick={handleGenerateRestock}
+              disabled={generating}
+              title="对当前所有预警商品生成补货计划清单并落库"
+            >
+              {generating ? "生成中…" : "生成补货清单"}
+            </button>
+          )}
         </div>
-        {warnings.length > 0 ? (
+        {warnLoading ? (
+          <div className="loading-inline">
+            <span className="spinner" />
+            预警加载中…
+          </div>
+        ) : warnError ? (
+          <div className="notice notice-error">
+            预警加载失败（已降级，面板数据不受影响）：{warnError}
+          </div>
+        ) : warnings.length > 0 ? (
           <div className="notice notice-warn">
             <div style={{ fontWeight: 600, marginBottom: 8 }}>库存预警（线2 · 可售天数 &lt; 5 天）</div>
             {warnings.map((w) => (
@@ -236,6 +318,9 @@ export default function Dashboard() {
           </div>
         ) : (
           <p className="muted">暂无库存预警 🎉</p>
+        )}
+        {restockMsg && (
+          <div className="notice notice-info" style={{ marginTop: 8 }}>{restockMsg}</div>
         )}
       </div>
 
@@ -255,10 +340,12 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {inventories.map((inv) => {
-                const ratio =
-                  inv.safeStockThreshold > 0
-                    ? Math.min(inv.currentStock / (inv.safeStockThreshold * 2), 1)
-                    : 1;
+                const cur = inv.currentStock || 0;
+                const safe = inv.safeStockThreshold || 0;
+                // 刻度上限取「当前 / 安全库存」的较大者再放 20%，避免水位条过早顶满。
+                const scaleMax = Math.max(cur, safe) * 1.2 || 1;
+                const fillPct = Math.min((cur / scaleMax) * 100, 100);
+                const thresholdPct = safe > 0 ? Math.min((safe / scaleMax) * 100, 100) : 0;
                 const fillClass =
                   inv.inventoryStatus === "RISK"
                     ? "bad"
@@ -268,13 +355,28 @@ export default function Dashboard() {
                 return (
                   <tr key={inv.id}>
                     <td>{productName(inv.productId)}</td>
-                    <td>{inv.currentStock}</td>
-                    <td>{inv.safeStockThreshold}</td>
+                    <td>{cur}</td>
+                    <td>{safe}</td>
                     <td>
                       <span className="stock-bar">
-                        <span className={`stock-fill ${fillClass}`} style={{ width: `${ratio * 100}%` }} />
+                        <span className={`stock-fill ${fillClass}`} style={{ width: `${fillPct}%` }} />
+                        {safe > 0 && (
+                          <span
+                            className="stock-threshold"
+                            style={{ left: `${thresholdPct}%` }}
+                            title={`安全库存线：${safe}`}
+                          />
+                        )}
                       </span>
-                      <span className="muted">{inv.inventoryStatus}</span>
+                      <span className="muted">
+                        {inv.inventoryStatus}
+                        {safe > 0 && (
+                          <>
+                            {" · "}
+                            {cur >= safe ? "高于安全线" : "低于安全线"}
+                          </>
+                        )}
+                      </span>
                     </td>
                   </tr>
                 );

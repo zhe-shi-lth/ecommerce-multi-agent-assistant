@@ -1,36 +1,39 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings } from "../api/settings";
-import { LLM_PRESETS, VISION_PRESETS, presetOf } from "../api/presets";
+import { getCatalog, type ModelCatalog } from "../api/catalog";
 import type { Json } from "../api/types";
 import PageHeader from "../components/PageHeader";
+import { Icon } from "../components/icons";
+
+interface CardSettings {
+  enabled?: boolean;
+  vendor: string;
+  base_url: string;
+  model: string;
+  api_key: string;
+  edit_model?: string;
+  ref_strength?: number;
+}
 
 interface Settings {
-  llm: {
-    enabled: boolean;
-    vendor: string;
-    base_url: string;
-    model: string;
-    api_key: string;
-  };
-  vision: {
-    vendor: string;
-    base_url: string;
-    model: string;
-    api_key: string;
-  };
-  image: { enabled: boolean; ref_strength: number };
+  llm: CardSettings & { enabled: boolean };
+  image: CardSettings & { enabled: boolean; edit_model: string; ref_strength: number };
+  video: CardSettings & { enabled: boolean };
+  monitor: CardSettings & { enabled: boolean };
   image_review_enabled: boolean;
   rag_enabled: boolean;
 }
 
-type Group = "llm" | "vision";
+type Group = "llm" | "image" | "video" | "monitor";
 
 // 把后端 Json 规整为本页强类型（缺字段时用默认值兜底）。
 function normalize(raw: Json): Settings {
   const obj = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, Json>;
-  const llm = (obj.llm && typeof obj.llm === "object" ? obj.llm : {}) as Record<string, Json>;
-  const vision = (obj.vision && typeof obj.vision === "object" ? obj.vision : {}) as Record<string, Json>;
-  const image = (obj.image && typeof obj.image === "object" ? obj.image : {}) as Record<string, Json>;
+  const pick = (name: string) => ((obj[name] && typeof obj[name] === "object" ? obj[name] : {}) as Record<string, Json>);
+  const llm = pick("llm");
+  const image = pick("image");
+  const video = pick("video");
+  const monitor = pick("monitor");
   const str = (v: Json, d = "") => (typeof v === "string" ? v : d);
   const bool = (v: Json, d = true) => (typeof v === "boolean" ? v : d);
   const num = (v: Json, d = 0.4) =>
@@ -39,19 +42,32 @@ function normalize(raw: Json): Settings {
     llm: {
       enabled: bool(llm.enabled, true),
       vendor: str(llm.vendor, "dashscope"),
-      base_url: str(llm.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-      model: str(llm.model),
+      base_url: str(llm.base_url),
+      model: str(llm.model, "qwen3.7-plus"),
       api_key: str(llm.api_key),
-    },
-    vision: {
-      vendor: str(vision.vendor, "dashscope"),
-      base_url: str(vision.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-      model: str(vision.model, "qwen-vl-max"),
-      api_key: str(vision.api_key),
     },
     image: {
       enabled: bool(image.enabled, true),
+      vendor: str(image.vendor, "qwen"),
+      base_url: str(image.base_url),
+      model: str(image.model, "qwen-image-2.0-pro-2026-06-22"),
+      edit_model: str(image.edit_model, "qwen-image-2.0-pro-2026-06-22"),
+      api_key: str(image.api_key),
       ref_strength: num(image.ref_strength, 0.4),
+    },
+    video: {
+      enabled: bool(video.enabled, true),
+      vendor: str(video.vendor, "dashscope"),
+      base_url: str(video.base_url),
+      model: str(video.model, "wan2.7-t2v"),
+      api_key: str(video.api_key),
+    },
+    monitor: {
+      enabled: bool(monitor.enabled, false),
+      vendor: str(monitor.vendor, "dashscope"),
+      base_url: str(monitor.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+      model: str(monitor.model, "qwen3.7-plus"),
+      api_key: str(monitor.api_key),
     },
     image_review_enabled: bool(obj.image_review_enabled, true),
     rag_enabled: bool(obj.rag_enabled, false),
@@ -60,6 +76,7 @@ function normalize(raw: Json): Settings {
 
 export default function Settings() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -68,6 +85,9 @@ export default function Settings() {
     getSettings()
       .then((r) => setSettings(normalize(r)))
       .catch((e) => setError(String(e)));
+    getCatalog()
+      .then(setCatalog)
+      .catch(() => setCatalog(null));
   }, []);
 
   function update<K extends keyof Settings>(group: K, patch: Partial<Settings[K]>) {
@@ -78,21 +98,39 @@ export default function Settings() {
     setSaved(false);
   }
 
-  // 选了厂家预设 → 把官方 base_url / 默认模型填进表单（Key 不动，由用户填）。选「自定义」则留空。
-  function applyPreset(group: Group, key: string) {
-    const preset = presetOf(group === "llm" ? LLM_PRESETS : VISION_PRESETS, key);
+  // 选厂家：已知厂家自动填入默认模型 + 派生 base_url；custom 保留手填。
+  function onVendorChange(group: Group, vendor: string) {
     setSettings((prev) => {
       if (!prev) return prev;
-      const g = prev[group] as Record<string, string>;
-      return {
-        ...prev,
-        [group]: {
-          ...g,
-          vendor: key,
-          base_url: preset ? preset.base_url : "",
-          model: preset ? preset.default_model : "",
-        },
-      } as Settings;
+      const g = prev[group] as CardSettings;
+      const entry = catalog?.[group]?.[vendor];
+      const isCustom = vendor === "custom";
+      const models = entry?.models ?? [];
+      const firstModel = models[0]?.id ?? "";
+      const editDefault =
+        models.find((m) => m.id.includes("imageedit"))?.id ?? firstModel;
+      const next: CardSettings = {
+        ...g,
+        vendor,
+        model: isCustom ? g.model : firstModel,
+        base_url: isCustom ? g.base_url : (entry?.base_url ?? ""),
+      };
+      if (group === "image") {
+        next.edit_model = isCustom ? g.edit_model : editDefault;
+      }
+      return { ...prev, [group]: next } as Settings;
+    });
+    setSaved(false);
+  }
+
+  // 选模型：已知厂家的 base_url 跟随厂家派生（只读），custom 保持手填。
+  function onModelChange(group: Group, model: string) {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const g = prev[group] as CardSettings;
+      const entry = catalog?.[group]?.[g.vendor];
+      const base_url = g.vendor === "custom" ? g.base_url : (entry?.base_url ?? "");
+      return { ...prev, [group]: { ...g, model, base_url } } as Settings;
     });
     setSaved(false);
   }
@@ -115,9 +153,84 @@ export default function Settings() {
   if (!settings) {
     return (
       <section>
-        <PageHeader title="设置中心" subtitle="加载中…" />
+        <PageHeader title="设置中心" subtitle="加载中…" icon={<Icon name="settings" />} />
         {error && <div className="notice notice-error">出错：{error}</div>}
       </section>
+    );
+  }
+
+  const vendorOptions = (group: Group) =>
+    catalog?.[group] ? Object.entries(catalog[group]).map(([key, v]) => ({ key, label: v.label })) : [];
+  const modelOptions = (group: Group) => catalog?.[group]?.[settings[group].vendor]?.models ?? [];
+
+  // 渲染一个能力卡片的「厂家 + 模型 + 派生 base_url + Key」通用部分。
+  function renderCardBody(group: Group) {
+    if (!settings) return null;
+    const g = settings[group] as CardSettings;
+    const isCustom = g.vendor === "custom";
+    const models = modelOptions(group);
+    return (
+      <>
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>厂家</span>
+          <select value={g.vendor} onChange={(e) => onVendorChange(group, e.target.value)}>
+            {vendorOptions(group).map((v) => (
+              <option key={v.key} value={v.key}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>模型（从厂家支持的列表中选择）</span>
+          {isCustom ? (
+            <input
+              value={g.model}
+              placeholder="自定义模型名（手填）"
+              onChange={(e) => onModelChange(group, e.target.value)}
+            />
+          ) : (
+            <select value={g.model} onChange={(e) => onModelChange(group, e.target.value)}>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>Base URL（由厂家+模型派生，{isCustom ? "自定义需手填" : "只读"}）</span>
+          <input
+            value={g.base_url}
+            placeholder={isCustom ? "https://.../v1 或 /api/v1/..." : "（由所选厂家自动派生）"}
+            readOnly={!isCustom}
+            onChange={(e) => isCustom && update(group, { base_url: e.target.value })}
+          />
+          {!isCustom && !g.base_url && (
+            <small className="muted">
+              该厂家走官方 SDK 默认端点（仅用 API Key 鉴权），无需填写 Base URL。
+            </small>
+          )}
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            API Key（{group === "monitor" ? "库存监控" : group === "video" ? "视频" : group === "image" ? "图片" : "文案"}卡片独立填写）
+            <br />
+            <small className="muted">不借用其它卡片、不读 .env；缺 Key 将直接报错（不降级）。</small>
+          </span>
+          <input
+            type="password"
+            value={g.api_key}
+            placeholder="sk-..."
+            autoComplete="off"
+            onChange={(e) => update(group, { api_key: e.target.value })}
+          />
+        </div>
+      </>
     );
   }
 
@@ -125,131 +238,45 @@ export default function Settings() {
     <section>
       <PageHeader
         title="设置中心"
-        subtitle="这里的设置会持久化保存（重启后保留），后续生成按此设定走。各厂家均为 OpenAI 兼容协议：选预设后只填 API Key 即可；未填 Key 的云端厂家将走规则/占位，不读取任何配置文件。"
+        subtitle="按用途组织：文案生成、商品图片生成。每张卡片选厂家+模型，Base URL 由厂家与模型自动派生（不再手填模型名），互不借用、互不借 Key。"
+        icon={<Icon name="settings" />}
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
       {saved && <div className="notice notice-ok">已保存，后续生成按新设定执行。</div>}
 
       <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>文本大模型（LLM）</h3>
+        <h3 style={{ marginTop: 0 }}>文案生成模型</h3>
         <label className="check-row">
           <input
             type="checkbox"
             checked={settings.llm.enabled}
             onChange={(e) => update("llm", { enabled: e.target.checked })}
           />
-          <span>启用 LLM（关闭则 Agent 走规则实现）</span>
+          <span>启用文案生成（关闭则 Agent 走规则实现，不调用大模型）</span>
         </label>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>厂家预设</span>
-          <select
-            value={settings.llm.vendor}
-            onChange={(e) => applyPreset("llm", e.target.value)}
-          >
-            {LLM_PRESETS.map((v) => (
-              <option key={v.key} value={v.key}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>Base URL（OpenAI 兼容）</span>
-          <input
-            value={settings.llm.base_url}
-            placeholder="https://.../v1"
-            onChange={(e) => update("llm", { base_url: e.target.value })}
-          />
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>模型名（留空用厂家默认）</span>
-          <input
-            value={settings.llm.model}
-            placeholder="如 qwen-plus / deepseek-chat / gpt-4o-mini"
-            onChange={(e) => update("llm", { model: e.target.value })}
-          />
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>
-            API Key（可选）
-            <br />
-            <small className="muted">留空则不使用云端 LLM（Agent 走规则实现）；Ollama 本地可不填。</small>
-          </span>
-          <input
-            type="password"
-            value={settings.llm.api_key}
-            placeholder="sk-...（留空则用 .env）"
-            autoComplete="off"
-            onChange={(e) => update("llm", { api_key: e.target.value })}
-          />
-        </div>
+        {renderCardBody("llm")}
+        <p className="muted" style={{ marginTop: 8 }}>
+          用于根据商品信息与商家备注，自动生成商品文案（卖点、标题、详情等）。
+        </p>
       </div>
 
       <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>视觉模型（看图写文案）</h3>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>厂家预设</span>
-          <select
-            value={settings.vision.vendor}
-            onChange={(e) => applyPreset("vision", e.target.value)}
-          >
-            {VISION_PRESETS.map((v) => (
-              <option key={v.key} value={v.key}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>Base URL（OpenAI 兼容多模态）</span>
-          <input
-            value={settings.vision.base_url}
-            placeholder="https://.../v1"
-            onChange={(e) => update("vision", { base_url: e.target.value })}
-          />
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>模型名</span>
-          <input
-            value={settings.vision.model}
-            placeholder="如 qwen-vl-max / gpt-4o / glm-4v-plus"
-            onChange={(e) => update("vision", { model: e.target.value })}
-          />
-        </div>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>
-            API Key（可选）
-            <br />
-            <small className="muted">
-              留空则复用「文本大模型」里填的 Key（出图也用此 Key）。
-            </small>
-          </span>
-          <input
-            type="password"
-            value={settings.vision.api_key}
-            placeholder="sk-...（留空则用 LLM 的 Key）"
-            autoComplete="off"
-            onChange={(e) => update("vision", { api_key: e.target.value })}
-          />
-        </div>
-      </div>
-
-      <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>出图模型（DashScope 万相）</h3>
+        <h3 style={{ marginTop: 0 }}>商品图片生成模型</h3>
         <label className="check-row">
           <input
             type="checkbox"
             checked={settings.image.enabled}
             onChange={(e) => update("image", { enabled: e.target.checked })}
           />
-          <span>启用真实文生图 / 图生图</span>
+          <span>启用商品图片生成（关闭则走规则占位图）</span>
         </label>
+        {renderCardBody("image")}
         <div className="field" style={{ marginBottom: 12 }}>
           <span>
-            图文比重（ref_strength）：{settings.image.ref_strength.toFixed(2)}
+            参考图保留程度（ref_strength）：{settings.image.ref_strength.toFixed(2)}
             <br />
             <small className="muted">
-              越低=原图改动越大；越高=越保留原图。仅对「上传了图→图生图」生效。
+              仅在你上传参考图、走「图生图」时生效：越低=原图改动越大；越高=越保留原图。不传参考图时系统自动用「文生图」。
             </small>
           </span>
           <input
@@ -261,6 +288,26 @@ export default function Settings() {
             onChange={(e) => update("image", { ref_strength: Number(e.target.value) })}
           />
         </div>
+        <p className="muted" style={{ marginTop: 8 }}>
+          用于生成商品主图。是否走「图生图」由你在上架流程里是否上传参考图决定，无需在此单独选择模型。
+        </p>
+      </div>
+
+      <div className="card listing-review">
+        <h3 style={{ marginTop: 0 }}>库存监控模型（线2 智能预警）</h3>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={settings.monitor.enabled}
+            onChange={(e) => update("monitor", { enabled: e.target.checked })}
+          />
+          <span>启用库存监控大模型（关闭或配置错误时，按可售天数&lt;5天红线预警，不报错）</span>
+        </label>
+        {renderCardBody("monitor")}
+        <p className="muted" style={{ marginTop: 8 }}>
+          用于「销售监控」页的库存预警：判断未来 30 天可能推高销量的大促/节日，给出智能预警。
+          未启用或配置错误时自动降级为红线预警（仅按可售天数）。
+        </p>
       </div>
 
       <div className="card listing-review">
