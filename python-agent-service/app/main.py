@@ -4,11 +4,14 @@ import os
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.api.line1 import router as line1_router
 from app.api.line2 import router as line2_router
 from app.api.operation_plan import router as operation_plan_router
 from app.api.settings import router as settings_router
+from app.api.video import router as video_router
+from app.errors import ConfigError
 
 load_dotenv()
 
@@ -46,12 +49,22 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
+@app.exception_handler(ConfigError)
+def handle_config_error(request: Request, exc: ConfigError) -> JSONResponse:
+    """配置缺失/厂家不支持/能力未按要求启用 → 422 中文可读报错。
+
+    不暴露内部栈，直接把用户友好的中文原因返回给前端提示条。
+    """
+    return JSONResponse(status_code=422, content={"detail": exc.message})
+
 # 业务路由统一要求鉴权；/health 在下方单独放开。
 _auth = [Depends(get_current_user)]
 app.include_router(operation_plan_router, dependencies=_auth)
 app.include_router(line1_router, dependencies=_auth)
 app.include_router(line2_router, dependencies=_auth)
 app.include_router(settings_router, dependencies=_auth)
+app.include_router(video_router, dependencies=_auth)
 
 
 @app.get("/health")

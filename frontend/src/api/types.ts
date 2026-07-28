@@ -22,6 +22,7 @@ export interface OperationPlan {
   updatedAt: string;
   auditPassed?: boolean | null;
   auditMessage?: string | null;
+  line?: string | null;
 }
 
 export interface AgentRun {

@@ -54,7 +54,6 @@ class SupervisorAgent:
                 product_plan, run = self._safe_run(
                     "PRODUCT_PLANNING_AGENT",
                     lambda: self.product_agent.run(product, knowledge),
-                    lambda: self.product_agent._rule_based_run(product, knowledge),
                     {"product": product.model_dump(), "retrieved_knowledge": knowledge},
                     errors,
                 )
@@ -62,11 +61,9 @@ class SupervisorAgent:
             elif step == "image":
                 image_plan, run = self._safe_run(
                     "IMAGE_CREATIVE_AGENT",
-                    lambda: self.image_agent.run(product, product_plan, knowledge),
-                    lambda: self.image_agent._rule_based_run(product, product_plan, knowledge),
+                    lambda: self.image_agent.run(product, knowledge),
                     {
                         "product": product.model_dump(),
-                        "product_plan": product_plan.model_dump() if product_plan else None,
                         "retrieved_knowledge": knowledge,
                     },
                     errors,
@@ -76,7 +73,6 @@ class SupervisorAgent:
                 inventory_plan, run = self._safe_run(
                     "INVENTORY_PURCHASE_AGENT",
                     lambda: self.inventory_agent.run(inventory, order),
-                    lambda: self.inventory_agent._rule_based_run(inventory, order),
                     {"inventory": inventory.model_dump(), "order": order.model_dump()},
                     errors,
                 )
@@ -85,7 +81,6 @@ class SupervisorAgent:
                 fulfillment_plan, run = self._safe_run(
                     "ORDER_FULFILLMENT_AGENT",
                     lambda: self.fulfillment_agent.run(order, inventory),
-                    lambda: self.fulfillment_agent._rule_based_run(order, inventory),
                     {"order": order.model_dump(), "inventory": inventory.model_dump()},
                     errors,
                 )
@@ -124,10 +119,12 @@ class SupervisorAgent:
             agent_runs=agent_runs,
         )
 
-    def _safe_run(self, agent_name: str, run_fn, rule_fn, input_json: dict, errors: list[dict]):
-        """运行 Agent：成功记 SUCCESS；LLM/异常失败按重试次数重试，仍失败则降级到规则实现，链路继续。
+    def _safe_run(self, agent_name: str, run_fn, input_json: dict, errors: list[dict]):
+        """运行 Agent：成功记 SUCCESS；对**同一配置厂家**做瞬态重试，仍失败则如实抛出。
 
-        重试仅作用于 LLM 路径（run_fn）；降级后 rule_fn 为确定性兜底，不再重试。
+        不再降级到规则实现——配置缺失/厂家不支持/调用失败一律向上抛异常，
+        由 API 层统一转成用户友好报错（符合「不降级、直接报错」）。离线/规则模式下
+        run_fn 本身走确定性规则输出，不会进入失败分支。
         """
         start = perf_counter()
         output = None
@@ -142,9 +139,8 @@ class SupervisorAgent:
                 error_message = f"{type(exc).__name__}: {exc}"
                 if attempt < _LLM_RETRY:
                     continue
-                output = rule_fn()
-                status = "FAILED"
-                errors.append({"agent": agent_name, "error": error_message})
+                # 重试耗尽仍失败：如实抛出，由端点统一转成报错（不降级到规则）。
+                raise
 
         duration_ms = int((perf_counter() - start) * 1000)
         record = AgentRunRecord(

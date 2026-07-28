@@ -4,6 +4,7 @@ import { simulatePull, type SimulationResult } from "../api/simulation";
 import { getProducts } from "../api/products";
 import type { Product } from "../api/types";
 import PageHeader from "../components/PageHeader";
+import { Icon } from "../components/icons";
 
 const PLATFORMS = [
   { key: "taobao", label: "淘宝" },
@@ -99,6 +100,7 @@ export default function Simulator() {
       <PageHeader
         title="平台模拟"
         subtitle="本地模拟从电商平台 API 拉取订单（不调用真实平台）。生成的订单会联动扣减库存、写入日销，一次性灌满订单 / 库存 / 销售监控三个 tab。"
+        icon={<Icon name="simulator" />}
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
 

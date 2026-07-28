@@ -4,6 +4,7 @@ import { deleteFavoriteCopy, listFavoriteCopies } from "../api/operations";
 import type { FavoriteCopy } from "../api/types";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 export default function Favorites() {
   const [items, setItems] = useState<FavoriteCopy[]>([]);
@@ -35,7 +36,11 @@ export default function Favorites() {
 
   return (
     <section>
-      <PageHeader title="收藏夹" subtitle="沉淀优秀文案，供日后一键复用。" />
+      <PageHeader
+        title="收藏夹"
+        subtitle="沉淀优秀文案，供日后一键复用。"
+        icon={<Icon name="favorites" />}
+      />
       {loading && (
         <div className="loading">
           <span className="spinner" />

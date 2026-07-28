@@ -9,6 +9,7 @@ import PlanFields from "../components/PlanView";
 import { platformLabel, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import AlertModal from "../components/AlertModal";
+import { Icon } from "../components/icons";
 
 interface PlanBlock {
   title: string;
@@ -121,6 +122,7 @@ export default function OperationPlanDetail() {
       <PageHeader
         title={`运营计划 #${plan.id}`}
         subtitle={`Trace ${plan.traceId}`}
+        icon={<Icon name="plans" />}
       />
       <div className="meta">
         <span>状态: <StatusBadge status={plan.status} /></span>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 interface UserItem {
   email: string;
@@ -44,6 +45,7 @@ export default function UserMonitoring() {
       <PageHeader
         title="用户监控"
         subtitle="当前系统账号与登录情况（仅超级管理员可见）"
+        icon={<Icon name="usermonitor" />}
         actions={
           <button className="btn btn-secondary btn-sm" onClick={refresh} disabled={loading}>
             {loading ? "刷新中…" : "刷新"}

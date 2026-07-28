@@ -1,5 +1,6 @@
 // 轻量 fetch 封装：开发期经 Vite proxy 走相对前缀（/api 或 /agent），无需写死后端地址。
 import { clearToken, getToken } from "../auth";
+import { emitAppError } from "./errorBus";
 
 async function requestWithPrefix<T>(prefix: string, path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -27,7 +28,8 @@ async function requestWithPrefix<T>(prefix: string, path: string, init?: Request
       if (body) {
         try {
           const parsed = JSON.parse(body);
-          friendly = parsed.error || parsed.message || parsed.auditMessage || null;
+          // detail 为 FastAPI 422/HTTPException 的标准字段（后端 ConfigError 处理器返回 {"detail": 中文原因}）。
+          friendly = parsed.detail || parsed.error || parsed.message || parsed.auditMessage || null;
           if (!friendly) statusText += `: ${body}`;
         } catch {
           statusText += `: ${body}`;
@@ -35,6 +37,10 @@ async function requestWithPrefix<T>(prefix: string, path: string, init?: Request
       }
     } catch {
       /* 忽略读取异常，使用状态码兜底 */
+    }
+    // 非 401（401 已跳登录）统一以居中弹窗提示最终用户，不再静默。
+    if (res.status !== 401) {
+      emitAppError(friendly ?? statusText);
     }
     throw new Error(friendly ?? statusText);
   }

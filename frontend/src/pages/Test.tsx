@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, agentApi } from "../api/client";
 import PageHeader from "../components/PageHeader";
+import { Icon } from "../components/icons";
 
 interface MeInfo {
   email: string;
@@ -47,7 +48,6 @@ export default function Test() {
   const [javaOk, setJavaOk] = useState<boolean | null>(null);
   const [pyOk, setPyOk] = useState<boolean | null>(null);
   const [linkResult, setLinkResult] = useState<string>("");
-  const [linkError, setLinkError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -77,13 +77,12 @@ export default function Test() {
 
   async function runLinkTest() {
     setBusy(true);
-    setLinkError(null);
     setLinkResult("");
     try {
       const r = await agentApi.post("/ecommerce/operation-plan", SAMPLE_PLAN_REQUEST);
       setLinkResult(JSON.stringify(r, null, 2));
-    } catch (e) {
-      setLinkError(String(e));
+    } catch {
+      /* error surfaced via global modal */
     } finally {
       setBusy(false);
     }
@@ -94,7 +93,11 @@ export default function Test() {
 
   return (
     <div>
-      <PageHeader title="测试" subtitle="系统连通性与链路验证（仅超级管理员可见）" />
+      <PageHeader
+        title="测试"
+        subtitle="系统连通性与链路验证（仅超级管理员可见）"
+        icon={<Icon name="test" />}
+      />
 
       <div className="card">
         <div className="card-header">当前登录</div>
@@ -139,21 +142,10 @@ export default function Test() {
           <button className="btn btn-primary" onClick={runLinkTest} disabled={busy}>
             {busy ? "运行中…" : "运行一次计划生成"}
           </button>
-          {linkError && <div className="notice notice-error" style={{ marginTop: 12 }}>{linkError}</div>}
           {linkResult && (
-            <pre
-              style={{
-                marginTop: 12,
-                padding: 12,
-                background: "#0f172a",
-                color: "#e2e8f0",
-                borderRadius: 8,
-                overflow: "auto",
-                maxHeight: 420,
-              }}
-            >
+            <div className="json-view" style={{ marginTop: 12, maxHeight: 420 }}>
               {linkResult}
-            </pre>
+            </div>
           )}
         </div>
       </div>

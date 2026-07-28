@@ -10,6 +10,7 @@ import type { Inventory, Product } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 const EMPTY_FORM: CreateInventoryInput = {
   productId: 0,
@@ -118,7 +119,11 @@ export default function Inventories() {
 
   return (
     <section>
-      <PageHeader title="库存" subtitle="按商品维护库存水位，支撑线二日常补货监控。" />
+      <PageHeader
+        title="库存"
+        subtitle="按商品维护库存水位，支撑线二日常补货监控。"
+        icon={<Icon name="inventory" />}
+      />
       {loading && (
         <div className="loading">
           <span className="spinner" />

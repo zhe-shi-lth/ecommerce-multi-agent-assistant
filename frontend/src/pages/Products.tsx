@@ -9,6 +9,7 @@ import type { Product, Category } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 const EMPTY_FORM: CreateProductInput = {
   name: "",
@@ -84,6 +85,7 @@ export default function Products() {
       <PageHeader
         title="商品"
         subtitle="管理品类基础数据与商品目录。商品是线一上架的源头。"
+        icon={<Icon name="products" />}
       />
       {loading && (
         <div className="loading">

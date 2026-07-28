@@ -37,7 +37,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:latest")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "ollama")
 LLM_TEMPERATURE = _as_float(os.getenv("LLM_TEMPERATURE"), 0.3)
-LLM_TIMEOUT_MS = _as_int(os.getenv("LLM_TIMEOUT_MS"), 30000)
+LLM_TIMEOUT_MS = _as_int(os.getenv("LLM_TIMEOUT_MS"), 120000)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # RAG：本地向量知识库（可选；关闭或失败则链路退化为无知识库）
@@ -54,14 +54,9 @@ IMAGE_REVIEW_ENABLED = _as_bool(os.getenv("IMAGE_REVIEW_ENABLED"), default=True)
 
 # 通义万相（DashScope）文生图（可选；需 DASHSCOPE_API_KEY 且安装 dashscope SDK）
 # 关闭或失败则图片步骤只出提示词占位，不阻断上架链路。
+# 视觉模型（看图写文案）能力已移除；出图/视频的端点改由设置中心模型目录派生。
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 IMAGE_GEN_ENABLED = _as_bool(os.getenv("IMAGE_GEN_ENABLED"), default=False)
-# 通义千问视觉模型（看图写文案用），与文生图共用 DASHSCOPE_API_KEY
-DASHSCOPE_VL_MODEL = os.getenv("DASHSCOPE_VL_MODEL", "qwen-vl-max")
-# DashScope 的 OpenAI 兼容端点（文本 + 视觉多模态共用），可被设置中心覆盖。
-DASHSCOPE_BASE_URL = os.getenv(
-    "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
 
 # 知识库目录相对 python-agent-service/ 解析（Windows 安全，规避 cwd 漂移）
 BASE_DIR = Path(__file__).resolve().parents[1]

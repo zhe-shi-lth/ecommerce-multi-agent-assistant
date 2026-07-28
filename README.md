@@ -6,7 +6,7 @@
 - **Java Spring Boot 业务服务**：PostgreSQL 落库，提供商品 / 库存 / 订单 / 运营计划 / Agent 执行记录等 REST API。
 - **Java ↔ Python 双向 HTTP 闭环**：Java 编排入口加载业务数据并调用 Python 生成计划；Python 生成后通过 Tool API 把计划与执行明细写回 Java。
 
-> **本地优先**：不接真实电商 / 支付 / 物流 / 图片生成 API。真实 LLM 走本地 Ollama（可选，关闭后全部降级为规则实现，主链路不中断）。前端通过 Docker Compose 内 nginx 反代访问 Java，无需改 Java CORS。
+> **本地优先**：不接真实电商 / 支付 / 物流 / 图片生成 API。真实 LLM 走本地 Ollama（可选，关闭或选「规则」模式时走确定性规则实现，主链路不中断）。前端通过 Docker Compose 内 nginx 反代访问 Java，无需改 Java CORS。
 
 ---
 
@@ -60,14 +60,14 @@
 
 | 步骤 | 增强 | 关键设计 |
 | --- | --- | --- |
-| 0 | 接入本地 LLM（Ollama） | 5 个 Agent 结构化输出复用 Pydantic Schema；LLM 失败多级降级到规则实现，主链路不中断 |
+| 0 | 接入本地 LLM（Ollama） | 5 个 Agent 结构化输出复用 Pydantic Schema；LLM 调用失败直接报错（不静默降级到规则），由前端弹窗提示；关闭或选「规则」模式时显式走确定性规则实现 |
 | 0.5 | 前端只读 SPA | React + Vite，查看计划/四类产出/Agent trace/商品库存订单 |
 | 1 | 商品规划增强 | SEO 关键词 + 淘宝/抖音/小红书多平台文案 |
 | 2 | 分类知识库 RAG | 本地 Markdown 知识库 + 内存 Chroma 向量检索，注入商品/图片 Agent（可选，关 RAG 不影响主链路） |
 | 3 | 图片视觉审核 | 本地 LLM 对创意方案做合规/质量审核，产出 `image_review_result`（可选，关则走规则启发式） |
 | 4 | 库存需求预测 | 确定性 `compute_forecast`：日均需求/预计售罄天数/补货量/风险等级；LLM 仅写可读原因，数字由预测决定 |
 | 5 | 物流异常 + 售后联动 | 本地确定性物流风险检测（未付款/地址不全/库存不足/大单分批/库存紧张/需复核）+ 处理建议 + 售后建议 |
-| 6 | Supervisor 动态路由 + 前端确认 | 按 `trigger_type` 条件路由（演示分支 `INVENTORY_REVIEW` 仅库存+履约）；LLM 失败重试 1 次再降级；前端可对计划「确认/驳回」并落库 |
+| 6 | Supervisor 动态路由 + 前端确认 | 按 `trigger_type` 条件路由（演示分支 `INVENTORY_REVIEW` 仅库存+履约）；LLM 调用失败重试 1 次仍失败则直接报错（不降级）；前端可对计划「确认/驳回」并落库 |
 
 ---
 
@@ -211,7 +211,7 @@ Python 服务通过环境变量控制：
 | --- | --- | --- |
 | `IMAGE_REVIEW_ENABLED` | `true` | 关闭后不产出图片审核结果。 |
 
-- LLM 调用失败（如 Ollama 未启动）时，Supervisor 会自动降级到规则实现并继续，不会中断主链路；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
+- LLM 调用失败（如 Ollama 未启动、Key 缺失、端点不可达）：Supervisor 先重试 1 次，仍失败则**直接报错**（422 中文可读），由前端弹窗提示，**不再静默降级到规则实现**；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
 - 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
 
 ### 6. 前端（Node）
@@ -412,5 +412,5 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 ## 已知约束与下一步
 
 - 各表 `status` 字段有 CHECK 枚举约束，写数据时需使用合法枚举值（见上文示例）。
-- 默认 Agent 为规则实现；设置 `LLM_ENABLED=true` 且本地 Ollama 就绪后，5 个 Agent 走真实 LLM 生成，失败自动降级到规则。
+- 默认 Agent 为规则实现（显式选择「规则」或部署级 `LLM_ENABLED=false`）；设置 `LLM_ENABLED=true` 且本地 Ollama 就绪（或在设置中心选好其他厂家并填 Key）后，5 个 Agent 走真实 LLM 生成，调用失败直接报错（不再静默降级到规则）。
 - **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、LangGraph 动态编排。

@@ -5,6 +5,7 @@ import type { Order, Product } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import { Icon } from "../components/icons";
 
 type Tone = "ok" | "warn" | "bad" | "neutral";
 
@@ -145,7 +146,11 @@ export default function Orders() {
 
   return (
     <section>
-      <PageHeader title="订单" subtitle="订单履约看板：一眼看清哪些能发、哪些要处理。" />
+      <PageHeader
+        title="订单"
+        subtitle="订单履约看板：一眼看清哪些能发、哪些要处理。"
+        icon={<Icon name="orders" />}
+      />
 
       {loading && (
         <div className="loading">

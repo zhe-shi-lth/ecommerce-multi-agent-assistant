@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { isAuthed, setRole, setToken } from "../auth";
 import { api } from "../api/client";
 import RobotMascot from "../components/RobotMascot";
@@ -11,7 +11,6 @@ interface LoginResult {
 }
 
 export default function Login() {
-  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +34,8 @@ export default function Login() {
       });
       setToken(result.token);
       setRole(result.role);
-      navigate("/", { replace: true });
+      // 整页跳转：触发 App 重新挂载并重新校验 token，避免登录后白屏
+      window.location.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
       setBusy(false);

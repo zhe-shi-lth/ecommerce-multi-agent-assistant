@@ -15,12 +15,18 @@ import UserMonitoring from "./pages/UserMonitoring";
 import Test from "./pages/Test";
 import { clearToken, isAuthed, isSuperAdmin, setRole } from "./auth";
 import { api } from "./api/client";
+import { onAppError } from "./api/errorBus";
+import AlertModal from "./components/AlertModal";
+import { Icon } from "./components/icons";
 
 export default function App() {
   const authed = isAuthed();
   // 启动校验：本地有 token 时先向后端 /auth/me 验真，期间显示加载态，避免闪现主页；
   // 验真失败（过期/无效）清 token 回登录页。无 token 则无需校验，直接走登录路由。
   const [checking, setChecking] = useState(authed);
+  // 全局错误弹窗：后端非 2xx（如 ConfigError 422 中文报错）由 client.ts 发出，此处订阅并居中弹窗。
+  const [appError, setAppError] = useState<string | null>(null);
+  useEffect(() => onAppError((msg) => setAppError(msg)), []);
 
   useEffect(() => {
     if (!authed) return;
@@ -80,70 +86,75 @@ export default function App() {
           <span>电商多 Agent</span>
         </h1>
         <nav>
-          <div className="nav-group">流程</div>
+          <div className="nav-group">核心流程</div>
           <NavLink to="/new-listing" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="new" />
             新品上架
           </NavLink>
           <NavLink to="/operation-plans" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="plans" />
             运营计划
           </NavLink>
-          <div className="nav-group">数据</div>
+          <div className="nav-group">经营数据</div>
           <NavLink to="/products" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="products" />
             商品
           </NavLink>
           <NavLink to="/inventories" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="inventory" />
             库存
           </NavLink>
           <NavLink to="/orders" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="orders" />
             订单
           </NavLink>
           <NavLink to="/dashboard" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="dashboard" />
             销售监控
           </NavLink>
-          <div className="nav-group">模拟</div>
+          <div className="nav-group">工具</div>
           <NavLink to="/simulator" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="simulator" />
             平台模拟
           </NavLink>
-          <div className="nav-group">结果</div>
           <NavLink to="/favorites" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="favorites" />
             收藏夹
           </NavLink>
           <div className="nav-group">配置</div>
           <NavLink to="/settings" className="nav-link">
-            <span className="nav-dot" />
+            <Icon name="settings" />
             设置中心
           </NavLink>
           {isSuperAdmin() && (
-            <div className="nav-group">管理</div>
+            <div className="nav-group">系统</div>
           )}
           {isSuperAdmin() && (
             <NavLink to="/user-monitoring" className="nav-link">
-              <span className="nav-dot" />
+              <Icon name="usermonitor" />
               用户监控
             </NavLink>
           )}
           {isSuperAdmin() && (
             <NavLink to="/test" className="nav-link">
-              <span className="nav-dot" />
+              <Icon name="test" />
               测试
             </NavLink>
           )}
         </nav>
         <div className="sidebar-footer">
           <button className="nav-link" onClick={handleLogout}>
-            <span className="nav-dot" />
+            <Icon name="logout" />
             退出登录
           </button>
         </div>
       </aside>
+      <AlertModal
+        open={!!appError}
+        title="操作失败"
+        message={appError ?? ""}
+        onClose={() => setAppError(null)}
+      />
       <main className="content">
         <Routes>
           <Route path="/" element={<NewListing />} />
