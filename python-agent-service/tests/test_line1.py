@@ -67,7 +67,7 @@ def test_line1_full_flow_no_product_creation():
                 "/agent/ecommerce/line1/finalize",
                 json={
                     "product_id": 10,
-                    "platforms": ["xiaohongshu"],
+                    "platform": "xiaohongshu",
                     "product_plan": pp,
                     "image_plan": ip,
                 },
@@ -78,6 +78,8 @@ def test_line1_full_flow_no_product_creation():
             assert fin["operationPlanId"] == 99
             # finalize 只调 persist_line1_plan，不再调 create_product
             mock_persist.assert_called_once()
+            # 平台应透传到落库（线1 计划归属所选平台，而非 unspecified）
+            assert mock_persist.call_args.kwargs.get("platform") == "xiaohongshu"
     finally:
         _stop()
 

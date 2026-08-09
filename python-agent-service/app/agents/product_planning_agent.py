@@ -1,5 +1,5 @@
 from app.llm import client as llm_client
-from app.schemas.agent_outputs import ProductPlan
+from app.schemas.agent_outputs import ContentBrief, ProductPlan
 from app.schemas.product import ProductContext
 
 # 平台键 -> 中文名（用于拼装 prompt / 规则文案）
@@ -42,12 +42,16 @@ class ProductPlanningAgent:
         knowledge: str = "",
         selected_platforms: list[str] | None = None,
         notes: str = "",
+        content_brief: ContentBrief | None = None,
+        copy_requirements: str = "",
     ) -> ProductPlan:
         platforms = _resolve_platforms(selected_platforms)
         client = llm_client.get_llm_client()
         if client is None:
             # 离线/规则模式：显式走确定性规则实现（非隐式降级）。
-            return self._rule_based_run(product, knowledge, platforms, notes)
+            return self._rule_based_run(
+                product, knowledge, platforms, notes, content_brief, copy_requirements
+            )
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -55,6 +59,14 @@ class ProductPlanningAgent:
         )
         if notes:
             user_prompt += f"\n\n【商家备注】\n{notes}\n请结合备注中的额外信息撰写文案。"
+        if content_brief:
+            user_prompt += (
+                "\n\n【上架策略 Content Brief】\n"
+                f"{content_brief.model_dump_json(indent=2)}\n"
+                "请严格围绕这份统一策略生成文案，保持与图片/视频方向一致。"
+            )
+        if copy_requirements:
+            user_prompt += f"\n\n【文案专项要求】\n{copy_requirements}\n请优先满足这些文案要求。"
         if knowledge:
             user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
         prompt = _SYSTEM_PROMPT.format(
@@ -65,6 +77,7 @@ class ProductPlanningAgent:
         # 归一化平台键：LLM 偶发把 taobao 写成 timaobao，必须落回规范键，否则前端按键取不到
         plan = plan.model_copy(
             update={
+                "content_brief": content_brief,
                 "platform_copies": self._normalize_platform_copies(
                     plan.platform_copies, product, platforms
                 )
@@ -91,6 +104,8 @@ class ProductPlanningAgent:
         knowledge: str = "",
         platforms: list[str] | None = None,
         notes: str = "",
+        content_brief: ContentBrief | None = None,
+        copy_requirements: str = "",
     ) -> ProductPlan:
         platforms = _resolve_platforms(platforms)
         audience = product.target_audience or "目标用户"
@@ -129,8 +144,16 @@ class ProductPlanningAgent:
         if notes:
             selling_points = selling_points + [f"商家备注：{notes}"]
             detail_description += f"\n商家备注：{notes}"
+        if content_brief:
+            selling_points = selling_points + content_brief.core_selling_points
+            detail_description += (
+                f"\n上架策略：{content_brief.copy_direction}；语气：{content_brief.tone}"
+            )
+        if copy_requirements:
+            detail_description += f"\n文案专项要求：{copy_requirements}"
 
         return ProductPlan(
+            content_brief=content_brief,
             recommended_title=f"{product.name} {scenario}适用{product.category}好物",
             selling_points=selling_points,
             detail_description=detail_description,

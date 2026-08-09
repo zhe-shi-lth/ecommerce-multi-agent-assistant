@@ -1,7 +1,21 @@
 from pydantic import BaseModel, Field
 
 
+class ContentBrief(BaseModel):
+    """线一上架策略：图片、视频、文案共用的创意中间层。"""
+
+    target_audience: str = Field(min_length=1)
+    core_selling_points: list[str] = Field(min_length=1)
+    tone: str = Field(min_length=1)
+    visual_direction: str = Field(min_length=1)
+    video_direction: str = Field(min_length=1)
+    copy_direction: str = Field(min_length=1)
+    compliance_notes: list[str] = []
+    merchant_brief: str = ""
+
+
 class ProductPlan(BaseModel):
+    content_brief: ContentBrief | None = None
     recommended_title: str = Field(min_length=1)
     selling_points: list[str]
     detail_description: str = Field(min_length=1)
@@ -23,6 +37,7 @@ class ImageReviewResult(BaseModel):
 
 
 class ImagePlan(BaseModel):
+    content_brief: ContentBrief | None = None
     main_image_prompt: str = Field(min_length=1)
     scene_image_prompt: str = Field(min_length=1)
     marketing_image_prompt: str = Field(min_length=1)

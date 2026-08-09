@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import threading
 from pathlib import Path
@@ -24,6 +25,21 @@ from app import model_catalog
 # 存到仓库根的 data/ 下，刻意放在 python-agent-service 源码树之外——
 # 否则 fastapi dev 的 --reload 监听会把它当成源码变更，保存设置时反复重启服务。
 SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "settings.json"
+
+# 订单来源平台（与前端 frontend/src/platforms.ts、Java orders.platform 保持一致）。
+PLATFORM_KEYS = ("taobao", "douyin", "xiaohongshu")
+
+# 平台对接凭证字段模板：面向用户的「填了就能用」最小集合。
+# access_token 三家订单接口（taobao.trades.sold.get / 抖店 order.searchList / 小红书 order.getOrderList）
+# 都需要 OAuth 授权令牌，缺它"填好即用"不成立。
+_PLATFORM_API_FIELDS = {
+    "enabled": False,
+    "app_key": "",
+    "app_secret": "",
+    "endpoint": "",  # 空 = 用适配器内置官方网关；仅沙箱/自建代理需要手填
+    "shop_id": "",  # 抖店 shop_id / 小红书 seller_id / 淘宝 seller_nick
+    "access_token": "",  # OAuth 授权令牌
+}
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     # 文本 LLM（OpenAI 兼容）：启用开关 + 厂家预设键 + base_url + 模型名（空串=厂家默认）
@@ -64,6 +80,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "model": "",
         "api_key": "",
     },
+    # 订单监控（地址复核）：独立非 LLM 配置块。
+    # mode=demo 随机模拟平台同步复核（success_rate 为通过率）；mode=real 调平台地址完整标记（待接入）。
+    # 设置中心优先于环境变量（ORDER_MONITOR_MODE / ORDER_MONITOR_DEMO_SUCCESS_RATE），两者皆缺回退 demo。
+    "order_monitor": {
+        "mode": "demo",
+        "success_rate": 0.5,
+    },
+    # 平台对接（订单来源开放 API）：独立非 LLM 配置块，按平台各一份。
+    # 未启用 / 缺凭证 → 真实模式失败闭合并给出可读原因（不静默降级回模拟数据）。
+    # 凭证只来自本卡片，不读 .env；Java 不持有任何平台密钥（真实拉单时由 Python 读此处凭证翻译协议）。
+    "platform_api": {p: dict(_PLATFORM_API_FIELDS) for p in PLATFORM_KEYS},
     "image_review_enabled": True,
     "rag_enabled": False,
 }
@@ -114,6 +141,37 @@ def _normalize(data: dict) -> dict:
                     (m["id"] for m in vendor_models if "imageedit" in m["id"]),
                     block.get("model", ""),
                 )
+
+    # 订单监控（地址复核）：独立非 LLM 配置块，不进上面的模型目录校验循环。
+    order_block = data.get("order_monitor")
+    if not isinstance(order_block, dict):
+        data["order_monitor"] = {"mode": "demo", "success_rate": 0.5}
+    else:
+        mode = (order_block.get("mode") or "demo").strip().lower()
+        if mode not in ("demo", "real"):
+            mode = "demo"
+        try:
+            rate = float(order_block.get("success_rate", 0.5))
+        except (TypeError, ValueError):
+            rate = 0.5
+        rate = max(0.0, min(1.0, rate))
+        data["order_monitor"] = {"mode": mode, "success_rate": rate}
+
+    # 平台对接：非 LLM 配置块，不进上面的模型目录校验循环。按已知平台整体重建，
+    # 缺字段补默认、未知平台丢弃——同时修掉 _deep_merge 只合并两层导致的子块被整体覆盖问题。
+    raw = data.get("platform_api")
+    raw = raw if isinstance(raw, dict) else {}
+    data["platform_api"] = {
+        p: {
+            "enabled": bool((raw.get(p) or {}).get("enabled", False)),
+            "app_key": str((raw.get(p) or {}).get("app_key") or "").strip(),
+            "app_secret": str((raw.get(p) or {}).get("app_secret") or "").strip(),
+            "endpoint": str((raw.get(p) or {}).get("endpoint") or "").strip(),
+            "shop_id": str((raw.get(p) or {}).get("shop_id") or "").strip(),
+            "access_token": str((raw.get(p) or {}).get("access_token") or "").strip(),
+        }
+        for p in PLATFORM_KEYS
+    }
     return data
 
 
@@ -123,13 +181,13 @@ def load_settings() -> dict[str, Any]:
     with _lock:
         if _cache is not None:
             return _cache
-        data = DEFAULT_SETTINGS
+        data = copy.deepcopy(DEFAULT_SETTINGS)
         if SETTINGS_PATH.exists():
             try:
                 user = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-                data = _deep_merge(DEFAULT_SETTINGS, user)
+                data = _deep_merge(copy.deepcopy(DEFAULT_SETTINGS), user)
             except Exception:
-                data = DEFAULT_SETTINGS
+                data = copy.deepcopy(DEFAULT_SETTINGS)
         data = _normalize(data)
         _cache = data
         return data
@@ -174,6 +232,17 @@ def resolve_image_credentials() -> tuple[str, str, str, str, str]:
     model = (img.get("model") or "").strip() or "qwen-image-2.0-pro-2026-06-22"
     edit_model = (img.get("edit_model") or "").strip() or "qwen-image-2.0-pro-2026-06-22"
     return vendor, base_url, api_key, model, edit_model
+
+
+def resolve_platform_credentials(platform: str, settings: dict | None = None) -> dict[str, Any]:
+    """解析某平台的对接凭证（只来自设置中心「平台对接」卡片，不读 .env）。
+
+    返回 {platform, enabled, app_key, app_secret, endpoint, shop_id, access_token}；
+    未知平台返回 enabled=False 的空凭证，由适配器工厂负责报错。
+    """
+    s = settings or get_settings()
+    block = (s.get("platform_api", {}) or {}).get(platform, {}) or {}
+    return {"platform": platform, **{k: block.get(k, v) for k, v in _PLATFORM_API_FIELDS.items()}}
 
 
 def capabilities() -> dict[str, Any]:
@@ -241,11 +310,37 @@ def capabilities() -> dict[str, Any]:
             monitor_ok = False
             monitor_reason = "未填写监控大模型 API Key（请在设置中心监控卡片填写，否则红线预警）"
 
+    # 订单监控（地址复核）：非 LLM 配置块，始终可用；reason 说明当前模式。
+    om_block = s.get("order_monitor", {}) or {}
+    om_mode = (om_block.get("mode") or "demo").strip().lower()
+    order_monitor_ok = True
+    order_monitor_reason = (
+        "演示态（随机通过/拦截，演练用，生产前请切换为真实模式）"
+        if om_mode == "demo"
+        else "生产态（需在 OrderMonitorAgent._verify_real 经 PlatformAdapter 接入平台开放 API 读取 address_complete）"
+    )
+
+    # 平台对接：每平台单独判定「能否真实拉单/复核」，纯本地判定（不发网络请求）。
+    pa = s.get("platform_api", {}) or {}
+    platform_caps: dict[str, Any] = {}
+    for p in PLATFORM_KEYS:
+        b = pa.get(p, {}) or {}
+        if not b.get("enabled"):
+            platform_caps[p] = {"available": False, "reason": "未开启对接（设置中心 → 平台对接）"}
+        elif not b.get("app_key") or not b.get("app_secret"):
+            platform_caps[p] = {"available": False, "reason": "未填写 App Key / App Secret"}
+        elif not b.get("access_token"):
+            platform_caps[p] = {"available": False, "reason": "未填写店铺授权令牌（access_token）"}
+        else:
+            platform_caps[p] = {"available": True, "reason": ""}
+
     return {
         "llm": {"available": llm_ok, "reason": llm_reason},
         "image": {"available": img_ok, "reason": image_reason},
         "video": {"available": vid_ok, "reason": video_reason},
         "monitor": {"available": monitor_ok, "reason": monitor_reason},
+        "order_monitor": {"available": order_monitor_ok, "reason": order_monitor_reason},
+        "platform_api": platform_caps,
     }
 
 

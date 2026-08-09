@@ -7,7 +7,7 @@ from app import config
 from app.errors import ConfigError
 from app.llm import client as llm_client
 from app.settings_store import get_settings
-from app.schemas.agent_outputs import ImagePlan, ImageReviewResult
+from app.schemas.agent_outputs import ContentBrief, ImagePlan, ImageReviewResult
 from app.schemas.product import ProductContext
 
 _SYSTEM_PROMPT = (
@@ -55,10 +55,14 @@ class ImageCreativeAgent:
         platforms: list[str] | None = None,
         reference_image: str | None = None,
         notes: str = "",
+        content_brief: ContentBrief | None = None,
+        image_requirements: str = "",
     ) -> ImagePlan:
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(product, knowledge, notes)
+            return self._rule_based_run(
+                product, knowledge, notes, reference_image, content_brief, image_requirements
+            )
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -69,12 +73,22 @@ class ImageCreativeAgent:
                 f"\n\n【商家备注】\n{notes}\n"
                 "请结合备注中的风格 / 场景 / 卖点要求设计主图与整体视觉。"
             )
+        if content_brief:
+            user_prompt += (
+                "\n\n【上架策略 Content Brief】\n"
+                f"{content_brief.model_dump_json(indent=2)}\n"
+                "请严格围绕 visual_direction 设计图片，并与视频/文案方向保持一致。"
+            )
+        if image_requirements:
+            user_prompt += f"\n\n【图片专项要求】\n{image_requirements}\n请优先满足这些图片要求。"
         if knowledge:
             user_prompt += _KNOWLEDGE_APPEND.format(knowledge)
         image_plan = client.generate(_SYSTEM_PROMPT, user_prompt, ImagePlan)
         review = self._review_with_llm(client, product, image_plan, knowledge)
         image_plan = image_plan.model_copy(update={"image_review_result": review})
-        return self._attach_generated_images(image_plan, product, platforms, reference_image, notes)
+        image_plan = image_plan.model_copy(update={"content_brief": content_brief})
+        image_notes = "\n".join(x for x in [notes, image_requirements] if x)
+        return self._attach_generated_images(image_plan, product, platforms, reference_image, image_notes)
 
     def _rule_based_run(
         self,
@@ -82,23 +96,32 @@ class ImageCreativeAgent:
         knowledge: str = "",
         notes: str = "",
         reference_image: str | None = None,
+        content_brief: ContentBrief | None = None,
+        image_requirements: str = "",
     ) -> ImagePlan:
         scenario = product.usage_scenario or "日常使用场景"
 
         risk_notes = ["避免夸大功效", "避免使用侵权品牌元素"]
         if knowledge:
             risk_notes.append("参考知识库违禁词清单，规避平台违规词")
+        merged_notes = "\n".join(x for x in [notes, image_requirements] if x)
+        style = (
+            content_brief.visual_direction
+            if content_brief
+            else "清新明亮、生活方式、电商主图风格"
+        )
 
         image_plan = ImagePlan(
+            content_brief=content_brief,
             main_image_prompt=f"白色背景，{product.name}居中展示，突出商品外观和核心卖点。",
             scene_image_prompt=f"{scenario}场景中展示{product.name}的真实使用方式。",
             marketing_image_prompt=f"电商营销海报风格，突出{product.name}。",
-            image_style="清新明亮、生活方式、电商主图风格",
+            image_style=style,
             image_risk_notes=risk_notes,
         )
         review = self._review_rule_based(image_plan, knowledge)
         image_plan = image_plan.model_copy(update={"image_review_result": review})
-        return self._attach_generated_images(image_plan, product, None, reference_image, notes)
+        return self._attach_generated_images(image_plan, product, None, reference_image, merged_notes)
 
     def _build_copy_prompt(
         self,

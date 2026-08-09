@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from app.api.line1 import router as line1_router
 from app.api.line2 import router as line2_router
 from app.api.operation_plan import router as operation_plan_router
+from app.api.order_fulfillment import router as order_fulfillment_router
+from app.api.platform import router as platform_router
 from app.api.settings import router as settings_router
 from app.api.video import router as video_router
 from app.errors import ConfigError
@@ -61,9 +63,11 @@ def handle_config_error(request: Request, exc: ConfigError) -> JSONResponse:
 # 业务路由统一要求鉴权；/health 在下方单独放开。
 _auth = [Depends(get_current_user)]
 app.include_router(operation_plan_router, dependencies=_auth)
+app.include_router(order_fulfillment_router, dependencies=_auth)
 app.include_router(line1_router, dependencies=_auth)
 app.include_router(line2_router, dependencies=_auth)
 app.include_router(settings_router, dependencies=_auth)
+app.include_router(platform_router, dependencies=_auth)
 app.include_router(video_router, dependencies=_auth)
 
 

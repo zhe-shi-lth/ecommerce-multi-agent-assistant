@@ -181,6 +181,7 @@ class JavaApiClient:
         product_plan: dict,
         image_plan: dict,
         final_summary: str,
+        platform: str = "unspecified",
     ) -> Optional[int]:
         """线1上架：落库一条仅含商品规划+图片创意的运营计划（无订单、line=LINE1_ONBOARDING）。"""
         url = f"{self.base_url}/api/operation-plans"
@@ -196,6 +197,7 @@ class JavaApiClient:
             "manualReviewRequired": False,
             "status": "SUCCESS",
             "line": "LINE1_ONBOARDING",
+            "platform": platform,
         }
         try:
             resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)

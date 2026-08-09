@@ -9,13 +9,35 @@
 """
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.agents.inventory_monitor_agent import InventoryMonitorAgent
 from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
+from app.agents.order_monitor_agent import OrderMonitorAgent
 from app.schemas.inventory import InventoryContext
 from app.tools.java_api_client import JavaApiClient, logger
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["line2-monitor"])
+
+
+class OrderVerifyRequest(BaseModel):
+    order: dict
+
+
+class OrderVerifyResponse(BaseModel):
+    verified: bool
+    reason: str
+
+
+@router.post("/order-monitor/verify", response_model=OrderVerifyResponse)
+def verify_order(request: OrderVerifyRequest) -> OrderVerifyResponse:
+    """订单维度复核（OrderMonitorAgent）：确认收货地址是否真已补全。
+
+    Java 在「确认地址已补全」时调用，由本 Agent 向订单来源（平台）核验；
+    未通过则 Java 直接拦截（409），不流转状态。演示态为随机通过/拦截。
+    """
+    result = OrderMonitorAgent().verify(request.order)
+    return OrderVerifyResponse(verified=result.verified, reason=result.reason)
 
 
 @router.get("/line2/inventory-warnings")
