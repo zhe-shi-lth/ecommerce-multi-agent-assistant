@@ -16,7 +16,14 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.platform import PlatformOrder, PlanTarget, PublishListingPayload, configured_platforms, get_adapter
+from app.platform import (
+    PlatformOrder,
+    PlanTarget,
+    PublishListingPayload,
+    ShipResult,
+    configured_platforms,
+    get_adapter,
+)
 from app.settings_store import capabilities
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["platform"])
@@ -113,3 +120,27 @@ def platform_status() -> dict[str, Any]:
         "platforms": capabilities().get("platform_api", {}),
         "ready": configured_platforms(),
     }
+
+
+class ShipOrderRequest(BaseModel):
+    platform: str
+    platform_order_id: str
+    logistics_company: str = ""
+    waybill_no: str = ""
+
+
+class ShipOrderResponse(BaseModel):
+    success: bool
+    message: str
+    platform_ship_status: str = ""
+
+
+@router.post("/platform/ship-order", response_model=ShipOrderResponse)
+def ship_order(request: ShipOrderRequest) -> ShipOrderResponse:
+    """回写发货到平台：调对应 PlatformAdapter.ship_order（模拟器模式返回同构成功回执）。"""
+    result: ShipResult = get_adapter(request.platform).ship_order(
+        request.platform_order_id, request.logistics_company, request.waybill_no
+    )
+    return ShipOrderResponse(
+        success=result.success, message=result.message, platform_ship_status=result.platform_ship_status
+    )

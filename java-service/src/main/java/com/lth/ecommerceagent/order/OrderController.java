@@ -163,18 +163,19 @@ public class OrderController {
     }
 
     /**
-     * 发货闭环终态：商家在后台「发货」后调用，仅「可发货(READY_TO_SHIP)」可发货。
-     * 非 READY_TO_SHIP → 409 拒绝（如 INSUFFICIENT_STOCK / NEEDS_REVIEW / 仍待处理 必须先解决）。
-     * 通过 → 置 SHIPPED + 发货时间；物流缺失时由后端模拟生成（接真实平台后由平台返回）。
+     * 发货闭环：商家在后台「发货」后调用，调平台发货 API 回写物流。
+     * 仅「可发货(READY_TO_SHIP)」或「发货失败(SHIPPING_FAILED，可重试)」可发起；
+     * 其余态（INSUFFICIENT_STOCK / NEEDS_REVIEW / 仍待处理）必须先解决 → 409 拒绝。
+     * 平台受理成功 → SHIPPED；平台拒绝/调用异常 → SHIPPING_FAILED（保留原因，可重试）。
      */
     @PostMapping("/{id}/ship")
-    public OrderResponse ship(@PathVariable Long id) {
+    public OrderResponse ship(@PathVariable Long id, @RequestBody(required = false) ShipRequest request) {
         Order order = findOrder(id);
-        if (!"READY_TO_SHIP".equals(order.getStatus())) {
+        if (!"READY_TO_SHIP".equals(order.getStatus()) && !"SHIPPING_FAILED".equals(order.getStatus())) {
             throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "仅「可发货」订单可以发货，当前状态：" + order.getStatus());
+                    HttpStatus.CONFLICT, "仅「可发货 / 发货失败」订单可以发货，当前状态：" + order.getStatus());
         }
-        Order saved = orderCompletionService.ship(order);
+        Order saved = orderCompletionService.ship(order, request != null ? request : new ShipRequest(null, null));
         return toResponse(saved);
     }
 

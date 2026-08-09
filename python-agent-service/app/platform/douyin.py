@@ -19,6 +19,7 @@ from app.platform.base import (
     PlatformOrder,
     PublishListingPayload,
     PublishResult,
+    ShipResult,
 )
 
 
@@ -53,6 +54,17 @@ class DouyinAdapter(PlatformAdapter):
         #           else "平台复核：订单仍未付款")
         self._request("order.orderDetail", {"order_id": platform_order_id})
         raise ConfigError("抖音付款复核结果解析尚未实现（见 app/platform/douyin.py TODO）")
+
+    def _ship_order_real(
+        self, platform_order_id: str, logistics_company: str, waybill_no: str
+    ) -> ShipResult:
+        self.require_ready()
+        # TODO: 调抖店发货 API（如 order.logisticsAdd），回传平台发货状态。
+        self._request(
+            "order.logisticsAdd",
+            {"order_id": platform_order_id, "company": logistics_company, "logistics_code": waybill_no},
+        )
+        raise ConfigError("抖音真实发货回写尚未实现（见 app/platform/douyin.py TODO）")
 
     def list_orders(self, plans: list[PlanTarget], since_days: int) -> list[PlatformOrder]:
         self.require_ready()

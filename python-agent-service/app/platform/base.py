@@ -35,6 +35,15 @@ class PaymentCheck:
 
 
 @dataclass
+class ShipResult:
+    """平台发货回执（模式无关）：success=平台是否受理发货，message=可读原因/平台回执。"""
+
+    success: bool
+    message: str
+    platform_ship_status: str = ""  # 平台侧发货状态（如 SHIPPED / REJECTED），供 Java 回写
+
+
+@dataclass
 class PlanTarget:
     """Java 传来的「已确认运营计划」，供适配器把平台商品映射回本地 product_id。"""
 
@@ -188,6 +197,51 @@ class PlatformAdapter(ABC):
     def _paid_real(self, platform_order_id: str) -> PaymentCheck:
         """已配置真实凭证时，调平台开放 API 读取 paid（由各适配器实现）。"""
         raise NotImplementedError
+
+    def ship_order(
+        self, platform_order_id: str, logistics_company: str, waybill_no: str
+    ) -> ShipResult:
+        """回写发货（物流公司 + 运单号）到平台，模式无关，与 get_address_complete / get_paid 同构。
+
+        这是「模拟器 = 官方 API 替身」在发货维度的同一接缝：
+        - 已配置真实凭证 → 走 `_ship_order_real` 调平台发货开放 API（实现见各适配器 TODO）；
+        - 未配置（模拟器模式）→ 由 `_simulated_ship_order` 返回「平台已受理」的同构回执，
+          使系统在没有接官方 API 时也能完整演练「发货 → SHIPPED / 失败 → SHIPPING_FAILED」。
+
+        真实适配器未实现（TODO 桩）时 `_ship_order_real` 抛 `ConfigError`，由调用方失败闭合。
+        """
+        try:
+            self.require_ready()
+        except ConfigError:
+            return self._simulated_ship_order(platform_order_id, logistics_company, waybill_no)
+        return self._ship_order_real(platform_order_id, logistics_company, waybill_no)
+
+    @abstractmethod
+    def _ship_order_real(
+        self, platform_order_id: str, logistics_company: str, waybill_no: str
+    ) -> ShipResult:
+        """已配置真实凭证时，调平台发货开放 API 回写物流（由各适配器实现）。"""
+        raise NotImplementedError
+
+    def _simulated_ship_order(
+        self, platform_order_id: str, logistics_company: str, waybill_no: str
+    ) -> ShipResult:
+        """模拟器模式下的发货回执：一律受理成功，模拟平台已记录发货。
+
+        稳定且成功（模拟器充当官方 API 替身，不随机抖动）。接上真实凭证后自动改走 `_ship_order_real`；
+        真实 API 返回失败时，Java 侧会把订单置为 SHIPPING_FAILED 供重试。
+        """
+        if not (logistics_company or "").strip() or not (waybill_no or "").strip():
+            return ShipResult(
+                False,
+                "平台复核：发货缺少物流公司或运单号（模拟器）",
+                "REJECTED",
+            )
+        return ShipResult(
+            True,
+            f"平台确认：已受理发货（模拟器），物流={logistics_company}，运单={waybill_no}",
+            "SHIPPED",
+        )
 
     def _simulated_paid(self, platform_order_id: str) -> PaymentCheck:
         """模拟器模式下的付款真相：用平台单号做稳定哈希，约 60% 判定为「已付款」。

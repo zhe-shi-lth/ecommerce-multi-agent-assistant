@@ -20,6 +20,7 @@ from app.platform.base import (
     PlatformOrder,
     PublishListingPayload,
     PublishResult,
+    ShipResult,
 )
 
 _ADDR_FIELDS = (
@@ -62,6 +63,17 @@ class TaobaoAdapter(PlatformAdapter):
         #           else "平台复核：订单仍未付款")
         self._request("taobao.trade.fullinfo.get", {"tid": platform_order_id, "fields": "tid,status,payment"})
         raise ConfigError("淘宝付款复核结果解析尚未实现（见 app/platform/taobao.py TODO）")
+
+    def _ship_order_real(
+        self, platform_order_id: str, logistics_company: str, waybill_no: str
+    ) -> ShipResult:
+        self.require_ready()
+        # TODO: 调淘宝物流发货 API（如 taobao.logistics.offline.send），回传平台发货状态。
+        self._request(
+            "taobao.logistics.offline.send",
+            {"tid": platform_order_id, "company_code": logistics_company, "out_sid": waybill_no},
+        )
+        raise ConfigError("淘宝真实发货回写尚未实现（见 app/platform/taobao.py TODO）")
 
     def list_orders(self, plans: list[PlanTarget], since_days: int) -> list[PlatformOrder]:
         self.require_ready()

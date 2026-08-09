@@ -18,6 +18,7 @@ const STATUS_META: Record<string, { label: string; tone: Tone }> = {
   INSUFFICIENT_STOCK: { label: "库存不足", tone: "bad" },
   SHIPPED: { label: "已发货", tone: "ok" },
   REJECTED: { label: "已驳回", tone: "bad" },
+  SHIPPING_FAILED: { label: "发货失败", tone: "bad" },
 };
 function statusMeta(s: string): { label: string; tone: Tone } {
   return STATUS_META[s] ?? { label: s, tone: "neutral" };
@@ -99,12 +100,12 @@ export default function Orders() {
     return iso ? iso.slice(0, 10) : "";
   }
 
-  // 需要处理的订单（未付款 / 地址不全 / 库存不足 / 需审核）排在前，便于操作员优先处理。
+  // 需要处理的订单（未付款 / 地址不全 / 库存不足 / 需审核 / 发货失败）排在前，便于操作员优先处理。
   function issueCount(o: Order): number {
     let n = 0;
     if (!o.paid) n++;
     if (!o.addressComplete) n++;
-    if (o.status === "INSUFFICIENT_STOCK" || o.manualReviewRequired) n++;
+    if (o.status === "INSUFFICIENT_STOCK" || o.manualReviewRequired || o.status === "SHIPPING_FAILED") n++;
     return n;
   }
 

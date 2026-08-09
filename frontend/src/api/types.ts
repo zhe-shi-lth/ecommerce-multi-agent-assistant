@@ -145,3 +145,24 @@ export interface RecheckAllResult {
   stillInsufficient: number; // 库存仍不足、保持原状的笔数
   other: number; // 因未付款/地址不全翻回其他态的笔数
 }
+
+// 采购补货单（线2 库存处理工作台）
+export interface PurchaseOrder {
+  id: number;
+  productId: number;
+  quantity: number;
+  supplier?: string | null;
+  status: string; // CREATED / ORDERED / INBOUND / STOCKED
+  note?: string | null;
+  orderedAt?: string | null;
+  inboundAt?: string | null;
+  stockedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 入库结果：本采购单 + 入库后触发的缺货订单重判统计
+export interface StockInResult {
+  purchaseOrder: PurchaseOrder;
+  recheck: RecheckAllResult;
+}

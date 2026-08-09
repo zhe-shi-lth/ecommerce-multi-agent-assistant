@@ -250,6 +250,30 @@ public class PythonAgentClient {
         }
     }
 
+    /**
+     * 回写发货到平台（**模式无关**，供发货闭环复用）。
+     * 直接走 Python 的 PlatformAdapter.ship_order：已配置真实凭证 → 调官方发货 API；
+     * 未配置（模拟器模式）→ 返回同构的「平台已受理」回执。失败时 Python 返回 success=false + 原因，
+     * 这里按失败闭合处理（订单置 SHIPPING_FAILED，不静默放行）。
+     */
+    public PythonShipResult shipOrder(PythonShipRequest request) {
+        String url = baseUrl + "/agent/ecommerce/platform/ship-order";
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Service-Key", serviceKey);
+            HttpEntity<PythonShipRequest> entity = new HttpEntity<>(request, headers);
+            PythonShipResult result = restTemplate.postForObject(url, entity, PythonShipResult.class);
+            if (result == null) {
+                throw new PythonAgentException("平台发货返回空响应");
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new PythonAgentException("无法连接平台发货服务：" + e.getMessage(), e);
+        } catch (RestClientException e) {
+            throw new PythonAgentException(detailOf(e, "平台发货失败"), e);
+        }
+    }
+
     /** 优先取 Python 4xx 响应体里的 detail（中文可读原因），取不到再退回原始异常信息。 */
     private String detailOf(RestClientException e) {
         return detailOf(e, "拉取平台订单失败");

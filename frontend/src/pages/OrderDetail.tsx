@@ -15,7 +15,11 @@ const STATUS_META: Record<string, { label: string; tone: "ok" | "warn" | "bad" |
   INSUFFICIENT_STOCK: { label: "库存不足", tone: "bad" },
   SHIPPED: { label: "已发货", tone: "ok" },
   REJECTED: { label: "已驳回", tone: "bad" },
+  SHIPPING_FAILED: { label: "发货失败", tone: "bad" },
 };
+
+// 可选物流公司（与后端 OrderCompletionService.LOGISTICS 保持一致）
+const LOGISTICS_COMPANIES = ["顺丰速运", "中通快递", "圆通速递", "韵达快递", "京东物流"];
 function statusMeta(s: string): { label: string; tone: "ok" | "warn" | "bad" | "neutral" } {
   return STATUS_META[s] ?? { label: s, tone: "neutral" };
 }
@@ -33,6 +37,7 @@ const SLA_DAYS = 7;
 // 下一步建议：由订单真实信号推导的一句话动作指引
 function suggestionOf(o: Order): string {
   if (o.status === "SHIPPED") return "已发货，履约完成";
+  if (o.status === "SHIPPING_FAILED") return "发货失败，可重试发货（见下方失败原因）";
   if (o.status === "REJECTED") return "审核已驳回，不履约（请于平台侧线下取消/退款）";
   if (!o.paid) return "先催付，付款完成后再发货";
   if (!o.addressComplete) return "联系买家补全收货地址后再发货";
@@ -67,6 +72,9 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ msg: string; tone: "ok" | "error" } | null>(null);
+  const [shippingOpen, setShippingOpen] = useState(false);
+  const [shipLogistics, setShipLogistics] = useState<string>(LOGISTICS_COMPANIES[0]);
+  const [shipWaybill, setShipWaybill] = useState<string>("");
 
   useEffect(() => {
     Promise.all([getOrder(orderId), getProducts()])
@@ -95,6 +103,7 @@ export default function OrderDetail() {
   const readyToShip = order?.status === "READY_TO_SHIP";
   const insufficientStock = order?.status === "INSUFFICIENT_STOCK";
   const reviewNeeded = order?.status === "NEEDS_REVIEW";
+  const shipFailed = order?.status === "SHIPPING_FAILED";
   // 仅当单据真正完整（已付款 ∧ 地址完整 ∧ 库存充足）才允许"通过审核"，否则按钮禁用并提示先处理前置项。
   const canApprove =
     !!order && order.paid && order.addressComplete && order.status !== "INSUFFICIENT_STOCK";
@@ -122,8 +131,16 @@ export default function OrderDetail() {
     withFeedback(completeAddress(order!.id), (u) => `平台已确认地址完整，状态：${statusMeta(u.status).label}`);
   const handleConfirmPaid = () =>
     withFeedback(markPaid(order!.id), (u) => `平台已确认已付款，状态：${statusMeta(u.status).label}`);
-  const handleShip = () =>
-    withFeedback(shipOrder(order!.id), (u) => `已发货，状态：${statusMeta(u.status).label}`);
+  const handleShip = () => setShippingOpen(true);
+  const submitShip = () => {
+    setShippingOpen(false);
+    const body = { logisticsCompany: shipLogistics, waybillNo: shipWaybill.trim() };
+    withFeedback(shipOrder(order!.id, body), (u) =>
+      u.status === "SHIPPING_FAILED"
+        ? `发货失败：${u.pendingReason || "平台未受理，请重试"}`
+        : `已发货，状态：${statusMeta(u.status).label}`
+    );
+  };
   const handleReview = (decision: "APPROVE" | "REJECT") =>
     withFeedback(
       reviewOrder(order!.id, decision),
@@ -257,6 +274,11 @@ export default function OrderDetail() {
             {order.shippedAt ? `，发货时间：${fmt(String(order.shippedAt))}` : ""}。
           </div>
         )}
+        {shipFailed && (
+          <div className="notice notice-error" style={{ marginBottom: 12 }}>
+            发货失败：{order.pendingReason || "平台未受理发货"}。可在下方「重新发货」重试。
+          </div>
+        )}
         {order.status === "REJECTED" && (
           <div className="notice notice-error" style={{ marginBottom: 12 }}>
             审核已驳回，订单不履约（请于平台侧线下取消/退款）。
@@ -276,11 +298,53 @@ export default function OrderDetail() {
               确认已付款
             </button>
           )}
-          {readyToShip && (
+          {(readyToShip || shipFailed) && !shippingOpen && (
             <button className="btn btn-primary" onClick={handleShip} disabled={busy}>
               {busy ? <span className="spinner" /> : <Icon name="check" />}
-              发货
+              {shipFailed ? "重新发货" : "发货"}
             </button>
+          )}
+          {(readyToShip || shipFailed) && shippingOpen && (
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                alignItems: "center",
+                width: "100%",
+                padding: "12px 14px",
+                border: "1px solid #ececf0",
+                borderRadius: 10,
+                background: "#fafafb",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "#5b5f6b" }}>物流公司</span>
+              <select
+                className="header-select"
+                value={shipLogistics}
+                onChange={(e) => setShipLogistics(e.target.value)}
+              >
+                {LOGISTICS_COMPANIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="filter-input"
+                style={{ width: 200 }}
+                placeholder="运单号（可留空自动生成）"
+                value={shipWaybill}
+                onChange={(e) => setShipWaybill(e.target.value)}
+              />
+              <button className="btn btn-primary btn-sm" onClick={submitShip} disabled={busy}>
+                {busy ? <span className="spinner" /> : <Icon name="check" />}
+                确认发货
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShippingOpen(false)} disabled={busy}>
+                取消
+              </button>
+            </div>
           )}
           {insufficientStock && (
             <>

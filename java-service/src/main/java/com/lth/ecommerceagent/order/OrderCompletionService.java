@@ -10,8 +10,11 @@ import org.springframework.web.server.ResponseStatusException;
 import com.lth.ecommerceagent.inventory.Inventory;
 import com.lth.ecommerceagent.inventory.InventoryRepository;
 import com.lth.ecommerceagent.python.PythonAgentClient;
+import com.lth.ecommerceagent.python.PythonAgentException;
 import com.lth.ecommerceagent.python.PythonFulfillmentResult;
 import com.lth.ecommerceagent.python.PythonOrderFulfillmentRequest;
+import com.lth.ecommerceagent.python.PythonShipRequest;
+import com.lth.ecommerceagent.python.PythonShipResult;
 
 /**
  * 地址补全的落库与履约状态推导（单一真相源）。
@@ -259,23 +262,47 @@ public class OrderCompletionService {
     }
 
     /**
-     * 发货闭环的终态：仅「可发货(READY_TO_SHIP)」可发货。置 status / fulfillment_suggestion_status
-     * 为 SHIPPED，记录发货时间；物流公司与运单号缺失时由本方法模拟生成（与 MockOrderSource 同构），
-     * 接上真实平台后由平台返回物流信息，此处无需改动。
+     * 发货闭环：商家在订单详情「发货」→ 回写平台发货 API → 成功置 SHIPPED、失败置 SHIPPING_FAILED。
+     * 仅「可发货(READY_TO_SHIP)」或「发货失败(SHIPPING_FAILED，可重试)」可发起：
+     * - 调 Python PlatformAdapter.ship_order（模拟器模式返回同构受理回执；真实模式调官方发货 API）；
+     * - 平台受理成功 → 写回物流公司/运单号/发货时间，状态 SHIPPED；
+     * - 平台拒绝或调用异常 → 状态 SHIPPING_FAILED + pendingReason 记录失败原因，不发货、不扣减，可重试。
+     * 物流公司/运单号缺失时由本方法兜底生成（与模拟器同构），保证回写平台的最小字段齐全。
      */
     @Transactional
-    public Order ship(Order order) {
-        order.setStatus("SHIPPED");
-        order.setFulfillmentSuggestionStatus("SHIPPED");
-        order.setPendingReason(null);
-        order.setShippedAt(java.time.Instant.now());
-        if (order.getLogisticsCompany() == null || order.getLogisticsCompany().isBlank()) {
-            order.setLogisticsCompany(pickLogistics());
+    public Order ship(Order order, ShipRequest request) {
+        String logistics = (request.logisticsCompany() != null && !request.logisticsCompany().isBlank())
+                ? request.logisticsCompany()
+                : pickLogistics();
+        String waybill = (request.waybillNo() != null && !request.waybillNo().isBlank())
+                ? request.waybillNo()
+                : nextWaybill();
+        try {
+            PythonShipRequest pyReq = new PythonShipRequest(
+                    order.getPlatform(), order.getPlatformOrderId(), logistics, waybill);
+            PythonShipResult result = pythonAgentClient.shipOrder(pyReq);
+            if (Boolean.FALSE.equals(result.success())) {
+                // 平台拒绝受理：保留在待重试态，记录原因，不发货。
+                order.setStatus("SHIPPING_FAILED");
+                order.setFulfillmentSuggestionStatus("SHIPPING_FAILED");
+                order.setPendingReason(result.message() != null ? result.message() : "平台拒绝受理发货");
+                return orderRepository.save(order);
+            }
+            // 受理成功：写回物流与发货时间，翻成已发货。
+            order.setLogisticsCompany(logistics);
+            order.setWaybillNo(waybill);
+            order.setStatus("SHIPPED");
+            order.setFulfillmentSuggestionStatus("SHIPPED");
+            order.setPendingReason(null);
+            order.setShippedAt(java.time.Instant.now());
+            return orderRepository.save(order);
+        } catch (PythonAgentException e) {
+            // 平台发货服务调用失败（如未启动）：同样落 SHIPPING_FAILED 待重试，不让前端静默成功。
+            order.setStatus("SHIPPING_FAILED");
+            order.setFulfillmentSuggestionStatus("SHIPPING_FAILED");
+            order.setPendingReason(e.getMessage());
+            return orderRepository.save(order);
         }
-        if (order.getWaybillNo() == null || order.getWaybillNo().isBlank()) {
-            order.setWaybillNo(nextWaybill());
-        }
-        return orderRepository.save(order);
     }
 
     /**

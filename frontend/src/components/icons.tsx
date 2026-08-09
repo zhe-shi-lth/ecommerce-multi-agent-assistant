@@ -8,6 +8,7 @@ export type IconName =
   | "inventory"
   | "orders"
   | "dashboard"
+  | "purchase"
   | "simulator"
   | "settings"
   | "usermonitor"
@@ -64,6 +65,13 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M4 20V10M10 20V4M16 20v-7" />
       <path d="M3 20h18" />
+    </>
+  ),
+  purchase: (
+    <>
+      <path d="M3 7l9-4 9 4-9 4-9-4z" />
+      <path d="M3 7v10l9 4 9-4V7" />
+      <path d="M12 11v10" />
     </>
   ),
   simulator: (
