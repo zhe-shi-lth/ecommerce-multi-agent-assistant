@@ -24,14 +24,14 @@
 
 ---
 
-## 2. Agent 全景（共 6 个 Agent 类）
+## 2. Agent 全景（共 7 个 Agent 类）
 
-严格说 `app/agents/` 下有 6 个 Agent 类，分两类：
+严格说 `app/agents/` 下有 7 个 Agent 类，分三类：
 
 ### A. 主链路编排者（1 个）
 - **`SupervisorAgent`**（`supervisor_agent.py`）——调度中枢。按 `trigger_type` 动态路由，依次跑 `product → image → inventory → fulfillment`；`INVENTORY_VIEW` 触发时只跑后两个。带 trace / 重试，失败如实上报（不静默降级）。
 
-### B. 业务 Agent（5 个，真正干活）
+### B. 业务 Agent（4 个，主链路真正干活）
 
 | Agent | 文件 | 职责 | 所属线 |
 |---|---|---|---|
@@ -39,9 +39,15 @@
 | `ImageCreativeAgent` | `image_creative_agent.py` | 图片创意：主图文生图/图生图提示词 + 风格 + 合规审核 | 线1 上架 |
 | `InventoryPurchaseAgent` | `inventory_purchase_agent.py` | 库存与采购：补货建议/优先级，数字由确定性内核算，LLM 只补说明 | 线1 上架 |
 | `OrderFulfillmentAgent` | `order_fulfillment_agent.py` | 订单履约：发货判定/物流风险/人工确认建议 | 线1 上架 |
-| `InventoryMonitorAgent` | `inventory_monitor_agent.py` | 库存监控：真实日销 + 大促日历估"可售天数"，<5 天预警（销售监控页） | 线2 监控 |
 
-### C. 两个"确定性内核"模块（不是 Agent，是被 Agent 调用的"脑"）
+### C. 监控 Agent（2 个，线2 独立运行，不在 operation-plan 主链路内）
+
+| Agent | 文件 | 类型 | 职责 | 所属线 |
+|---|---|---|---|---|
+| `InventoryMonitorAgent` | `inventory_monitor_agent.py` | 预测型 | 库存监控：真实日销 + 大促日历估"可售天数"，<5 天预警（销售监控页）；可选 LLM 判未来事件 | 线2 监控 |
+| `OrderMonitorAgent` | `order_monitor_agent.py` | 核验型 | 订单维度复核（当前为地址补全复核）：商家点"确认地址已补全"后，先向订单来源复核地址是否真已补全，再决定能否流转状态；非 LLM（演示随机 / 真实平台校验） | 线2 监控 |
+
+### D. 两个"确定性内核"模块（不是 Agent，是被 Agent 调用的"脑"）
 - `forecast.py`（`compute_forecast`）→ 被 `InventoryPurchaseAgent` 用，纯统计算需求/补货量。
 - `logistics.py`（`compute_logistics_risk`）→ 被 `OrderFulfillmentAgent` 用，启发式算物流风险。
 
@@ -52,9 +58,13 @@
 
 ## 3. 是否都依赖"配置的大模型"？
 
-先厘清：**"大模型配置"其实是两张独立的卡**，不要混为一谈：
+先厘清：**设置中心是四张模型卡 + 两张独立非 LLM 卡**，不要混为一谈：
 - **LLM 卡片**（文本大模型，如 `qwen3.7-plus`）——管"写文案 / 写提示词"。
 - **图片卡片**（出图模型 `qwen-image`）——管"真实出图"，是**另一个独立模型**，跟文本 LLM 无关。
+- **视频卡片**（如万相 `wan2.7-t2v`）——管"真实出视频"，独立模型。
+- **监控卡片**（库存监控大模型）——管线2 库存智能预警；关闭/未配时按可售天数红线降级，不报错。
+- **订单监控（地址复核）卡片**——**非 LLM**：只有 `mode`（demo/real）+ 演示通过率，不调任何模型。
+- **平台对接（订单数据源）卡片**——**非 LLM**：各平台 `app_key` / `app_secret` / `endpoint` / 店铺 ID / 授权令牌；`simulatePull` 开关决定 `DATA_SOURCE`（模拟造数 / 真实拉单）。**平台密钥只存在此处**，Java 不持有。
 
 | Agent | 用文本 LLM？ | 没文本 LLM 时 | 用图片模型？ |
 |---|---|---|---|
@@ -63,9 +73,10 @@
 | `ImageCreativeAgent` | 是（写提示词/审核） | 降级为通用提示词 | **是**，真实出图独立于 LLM |
 | `InventoryPurchaseAgent` | 是（补原因说明） | 降级；**补货数字仍由确定性内核给** | 否 |
 | `OrderFulfillmentAgent` | 是（补履约建议） | 降级；**风险仍由确定性内核给** | 否 |
-| `InventoryMonitorAgent` | 否（纯确定性） | 正常 | 否 |
+| `InventoryMonitorAgent` | 否（纯确定性，可选 LLM 判未来事件） | 正常（红线降级） | 否 |
+| `OrderMonitorAgent` | **否（非 LLM）** | 正常（演示随机 / 真实平台校验） | 否 |
 
-要点：`InventoryPurchaseAgent` / `OrderFulfillmentAgent` / `InventoryMonitorAgent` 的**决策数字**来自 `forecast.py` / `logistics.py`，是**纯 Python 计算，根本不调任何模型**。文本 LLM 只补"人话"。而 `ImageCreativeAgent` 的**真实出图只认图片卡片 Key**，与文本 LLM 无关。
+要点：`InventoryPurchaseAgent` / `OrderFulfillmentAgent` 的**决策数字**来自 `forecast.py` / `logistics.py`，是**纯 Python 计算，根本不调任何模型**；`InventoryMonitorAgent` 也是纯确定性（可选 LLM 仅补"未来事件"判断）；`OrderMonitorAgent` 完全非 LLM。文本 LLM 只补"人话"。而 `ImageCreativeAgent` 的**真实出图只认图片卡片 Key**，与文本 LLM 无关。
 
 ---
 
@@ -181,10 +192,124 @@ sequenceDiagram
     Python多Agent-->>运营前端: 可售天数<5天 的预警列表
 ```
 
+### 图4 · 线2 订单复核（OrderMonitorAgent，地址补全复核）
+
+```mermaid
+sequenceDiagram
+    participant 运营前端
+    participant Java后端
+    participant Python多Agent
+    participant OrderMonitorAgent
+    participant 平台(订单来源)
+
+    运营前端->>Java后端: 订单详情点「确认地址已补全」POST /api/orders/{id}/complete-address
+    Java后端->>Python多Agent: POST /order-monitor/verify {platform, order_id, address_complete}
+    Python多Agent->>OrderMonitorAgent: verify(order)
+    alt demo（默认）
+        OrderMonitorAgent-->>Python多Agent: 随机通过/拦截（受设置中心演示通过率控制）
+    else real（生产态，待接入）
+        OrderMonitorAgent->>平台(订单来源): 读 address_complete（taobao.trade.fullinfo.get / order.orderDetail / 小红书）
+        平台(订单来源)-->>OrderMonitorAgent: 地址完整标记
+    end
+    alt verified=true
+        Python多Agent-->>Java后端: {verified:true}
+        Java后端->>Java后端: addressComplete=true + 重算履约 + 流转订单主状态
+        Java后端-->>运营前端: 成功，状态已流转
+    else verified=false
+        Python多Agent-->>Java后端: {verified:false, reason}
+        Java后端-->>运营前端: 409 + 原因（前端弹窗，不改状态）
+    end
+```
+
 ---
 
-## 6. 关键边界（讲的时候必说三点）
+## 6. 关键边界（讲的时候必说四点）
 
 1. **两个调用方向相反的入口**：线1（上架）是"前端 → Python，Python 拉 Java"；operation-plan 是"Java 推数据进 Python"。不要混为一谈。
 2. **Python 不碰数据库**：所有落库都通过 `JavaApiClient` 写回 Java（`X-Service-Key` 鉴权），Java 才是唯一数据源。Python 挂了，Java 业务照常跑。
 3. **确定性内核是"脑"**：`InventoryPurchaseAgent` / `OrderFulfillmentAgent` 的决策数字来自 `forecast.py` / `logistics.py`，LLM 只补文案——所以"不联网也能出合理结论，联网只是更会说人话"。
+4. **平台密钥只在 Python**：`app_key` / `app_secret` / `endpoint` / 店铺令牌只存于 Python `settings.json` 与 `PlatformAdapter`；**Java 永不持有任何平台密钥**。Java 经 `RealOrderSource` 只发"要哪些已确认计划、最近几天"（`POST /agent/ecommerce/platform/pull-orders`），平台协议翻译与凭证由 Python 保管；失败时 Python 把中文原因放进 `warnings`，Java 失败闭合（一个平台都没拉成 → 报中文错误，不静默回退到模拟）。适配器当前为脚手架（未接真实开放 API，未配置时抛 `ConfigError` 进 `warnings`）。
+
+---
+
+## 7. 订单数据来源（模拟 ↔ 真实）
+
+平台订单是整条履约链路的源头。为让系统在"没接平台"时也能完整演练、在"接上平台"后零改动切换，把"订单从哪来"收敛成一个 `OrderSource` 接口：
+
+```java
+public interface OrderSource {
+    String name();                                // mock / real，写入 orders.source
+    List<PulledOrder> pull(OrderPullCommand cmd); // 仅产出事实，不决定状态
+}
+```
+
+两种来源**只产出事实**（是否已付款 `paid`、地址是否完整 `addressComplete`、平台是否标记需复核 `manualReviewRequired`、收件人/金额/物流等结构化字段），业务状态由 Java 侧 `SimulationService.deriveStatus` 按**同一套规则**统一推导：
+
+| 事实组合 | 推导状态 |
+| --- | --- |
+| 运行库存 < 下单量（真实缺货） | `INSUFFICIENT_STOCK` |
+| `manualReviewRequired` | `NEEDS_REVIEW` |
+| `!paid \|\| !addressComplete` | `PENDING_ANALYSIS` |
+| 已付款 + 地址完整 + 无需复核 | `READY_TO_SHIP`（可发货） |
+
+由此 mock 与 real 两条路径落到 `orders` 表的行**完全同构**——下游 Agent、库存联动、日销聚合、前端页面都不感知数据来源，切换来源无需改动任何下游代码。
+
+- **`MockOrderSource`（`DATA_SOURCE=mock`，默认）**：本地造数，按"约 70% 可发 / 15% 待分析 / 15% 需复核"分布生成，带平台单号/收件人/金额/物流；**不判库存、不决定状态**，库存不足由运行库存实时推导，避免"明明有货却显示缺货"。
+- **`RealOrderSource`（`DATA_SOURCE=real`）**：经 Python `PlatformAdapter` 调各平台开放 API 取单，Java 不持密钥；失败闭合（见 §6 第 4 点）。
+- **幂等去重**：`orders` 对 `(platform, platform_order_id)` 建唯一索引；真实来源重复同步时跳过已存在单号，模拟来源单号带时间戳+序号天然不冲突。
+- **前端切换**：「模拟器」页加载时调 `GET /api/simulation/data-source`，`source=mock` 显示"平台模拟"、`source=real` 显示"平台订单同步"并列出已对接平台。
+
+### 图5 · 模拟 / 真实订单拉取时序（统一落库）
+
+```mermaid
+sequenceDiagram
+    participant FE as 前端 Simulator
+    participant Ctrl as SimulationController
+    participant Svc as SimulationService
+    participant Src as OrderSource
+    participant Repo as Order/Inventory/DailySales
+
+    FE->>Ctrl: GET /simulation/data-source
+    Ctrl->>Svc: dataSourceInfo()
+    Svc-->>Ctrl: {source: mock|real, platforms}
+    Ctrl-->>FE: 渲染「平台模拟」/「平台订单同步」界面
+
+    FE->>Ctrl: POST /simulation/pull-orders {days, planIds}
+    Ctrl->>Svc: pullOrders(req)
+    Svc->>Svc: 取已确认(CONFIRMED)运营计划 → 构造 PlanTarget
+    Svc->>Src: pull(OrderPullCommand)
+    Src-->>Svc: List<PulledOrder>（仅事实）
+    loop 每笔 PulledOrder
+        Svc->>Svc: deriveStatus(事实 + 运行库存)
+        Svc->>Repo: existsByPlatformAndPlatformOrderId?（幂等去重）
+        Svc->>Repo: save(Order) + 扣库存 + upsert 日销
+    end
+    Svc-->>Ctrl: SimulationResult
+    Ctrl-->>FE: 201 Created
+```
+
+### 图6 · 真实拉单的跨服务边界（Java ↔ Python ↔ 平台）
+
+```mermaid
+sequenceDiagram
+    participant Svc as SimulationService(Java)
+    participant Real as RealOrderSource(Java)
+    participant Py as PythonAgentClient(Java)
+    participant API as platform.py (Python)
+    participant Adp as PlatformAdapter(各平台)
+    participant Plat as 平台开放 API
+
+    Svc->>Real: pull(cmd)
+    Real->>Py: POST /agent/ecommerce/platform/pull-orders {plans, since_days}
+    Py->>API: X-Service-Key 鉴权后转发
+    loop 按 platform 分组
+        API->>Adp: get_adapter(platform).list_orders(plans, days)
+        Adp->>Plat: 调开放 API（凭证仅在 Python settings.json）
+        Plat-->>Adp: 平台订单
+        Adp-->>API: PlatformOrder（中立结构）
+    end
+    API-->>Py: {orders, platforms, warnings}
+    Py-->>Real: PythonPullOrdersResult
+    Real->>Real: 失败闭合（一个都没拉成 → 抛中文错误）
+    Real-->>Svc: List<PulledOrder>
+```
