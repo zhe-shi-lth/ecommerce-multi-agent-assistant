@@ -204,6 +204,25 @@ public class OperationPlanController {
         return toResponse(operationPlanRepository.save(plan));
     }
 
+    // 下架：仅已发布（CONFIRMED）的计划可下架。撤回商品发布状态 + 计划回到待审核，记录保留、可逆。
+    @PostMapping("/{id}/unpublish")
+    public ResponseEntity<OperationPlanResponse> unpublish(@PathVariable Long id) {
+        OperationPlan plan = findPlan(id);
+        if (!"CONFIRMED".equals(plan.getConfirmationStatus())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(toResponse(plan, false, "该计划未发布，无法下架"));
+        }
+        plan.setConfirmationStatus("PENDING");
+        plan.setConfirmedAt(null);
+        Product product = plan.getProduct();
+        if (product != null) {
+            product.setStatus("DRAFT");
+            productRepository.save(product);
+        }
+        OperationPlan saved = operationPlanRepository.save(plan);
+        return ResponseEntity.ok(toResponse(saved, true, "已下架"));
+    }
+
     private void apply(OperationPlanCreateRequest request, Product product, Order order, OperationPlan plan) {
         plan.setTraceId(request.traceId());
         plan.setProduct(product);

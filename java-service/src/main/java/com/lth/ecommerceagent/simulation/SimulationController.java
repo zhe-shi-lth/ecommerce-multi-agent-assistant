@@ -2,6 +2,7 @@ package com.lth.ecommerceagent.simulation;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,5 +21,10 @@ public class SimulationController {
     @PostMapping("/pull-orders")
     public ResponseEntity<SimulationResult> pullOrders(@RequestBody SimulationRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.pullOrders(request));
+    }
+
+    @GetMapping("/data-source")
+    public ResponseEntity<DataSourceInfo> dataSource() {
+        return ResponseEntity.ok(service.dataSourceInfo());
     }
 }

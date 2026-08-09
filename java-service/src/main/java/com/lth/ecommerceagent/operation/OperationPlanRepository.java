@@ -18,4 +18,11 @@ public interface OperationPlanRepository extends JpaRepository<OperationPlan, Lo
 
     @EntityGraph(attributePaths = {"product", "order"})
     Optional<OperationPlan> findByTraceId(String traceId);
+
+    // 模拟拉单：只针对「已确认(CONFIRMED)」的运营计划——计划才代表商品已真正在某平台上架。
+    @EntityGraph(attributePaths = {"product", "order"})
+    List<OperationPlan> findByConfirmationStatus(String confirmationStatus);
+
+    @EntityGraph(attributePaths = {"product", "order"})
+    List<OperationPlan> findByConfirmationStatusAndPlatform(String confirmationStatus, String platform);
 }

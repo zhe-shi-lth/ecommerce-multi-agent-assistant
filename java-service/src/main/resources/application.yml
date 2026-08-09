@@ -14,9 +14,19 @@ spring:
       ddl-auto: validate
     open-in-view: false
 
+server:
+  error:
+    # 4xx 业务异常（如平台未对接、凭证缺失）需要把中文原因带到前端弹窗，不能只给状态码。
+    include-message: always
+
 springdoc:
   swagger-ui:
     path: /docs
+
+# 订单数据来源：mock=本地模拟造数（默认，演示/试用）；real=经 Python 适配器拉取平台真实订单。
+# 切到 real 前需在「设置中心 → 平台对接」填好各平台凭证。
+platform:
+  data-source: ${DATA_SOURCE:mock}
 
 python:
   agent:

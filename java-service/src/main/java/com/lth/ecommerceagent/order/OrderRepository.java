@@ -17,4 +17,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findById(Long id);
 
     Optional<Order> findByProductId(Long productId);
+
+    // 真实拉单幂等：同一平台同一单号已入库则跳过，重复同步不会产生重复订单。
+    boolean existsByPlatformAndPlatformOrderId(String platform, String platformOrderId);
 }

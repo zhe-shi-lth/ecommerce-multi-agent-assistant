@@ -69,6 +69,7 @@ class RepositoryPersistenceTests {
 
         Order order = new Order();
         order.setProduct(product);
+        order.setPlatformOrderId("MOCKTEST000001");
         order.setQuantity(2);
         order.setStatus("PENDING_ANALYSIS");
         order.setAddressComplete(true);
