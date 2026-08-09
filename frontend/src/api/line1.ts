@@ -8,6 +8,8 @@ export const generateProductPlan = (body: {
   product_id: number;
   platforms: string[];
   notes?: string;
+  content_brief?: Json;
+  copy_requirements?: string;
 }) => agentApi.post<Json>("/ecommerce/line1/product-plan", body);
 
 export const generateImagePlan = (body: {
@@ -15,12 +17,21 @@ export const generateImagePlan = (body: {
   platforms: string[];
   reference_image?: string;
   notes?: string;
+  content_brief?: Json;
+  image_requirements?: string;
 }) => agentApi.post<Json>("/ecommerce/line1/image-plan", body);
+
+export const generateContentBrief = (body: {
+  product_id: number;
+  platforms: string[];
+  merchant_brief?: string;
+}) => agentApi.post<Json>("/ecommerce/line1/content-brief", body);
 
 // 落库（建运营计划挂到已有商品）。真实"发布到小红书"由 M3 接入。
 export const finalizeListing = (body: {
   product_id: number;
-  platforms: string[];
+  platform: string;
+  content_brief?: Json | null;
   product_plan: Json;
   image_plan: Json;
 }) =>

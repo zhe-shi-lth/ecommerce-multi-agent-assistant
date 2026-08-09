@@ -2,7 +2,12 @@
 import { clearToken, getToken } from "../auth";
 import { emitAppError } from "./errorBus";
 
-async function requestWithPrefix<T>(prefix: string, path: string, init?: RequestInit): Promise<T> {
+async function requestWithPrefix<T>(
+  prefix: string,
+  path: string,
+  init?: RequestInit,
+  opts?: { silent?: boolean },
+): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
   if (init?.body && !headers.has("Content-Type")) {
@@ -39,29 +44,38 @@ async function requestWithPrefix<T>(prefix: string, path: string, init?: Request
       /* 忽略读取异常，使用状态码兜底 */
     }
     // 非 401（401 已跳登录）统一以居中弹窗提示最终用户，不再静默。
-    if (res.status !== 401) {
+    // silent=true 时由调用方自行处理错误（如表单内联提示），不再弹全局弹窗，避免重复弹窗。
+    if (res.status !== 401 && !opts?.silent) {
       emitAppError(friendly ?? statusText);
     }
     throw new Error(friendly ?? statusText);
   }
+  // 204 No Content 或空响应体：不解析 JSON（如 DELETE 删除接口返回空体），
+  // 否则 res.json() 会对空串抛 "Unexpected end of JSON input"。
+  if (res.status === 204) return undefined as T;
+  const len = res.headers.get("content-length");
+  const hasBody = len == null || len !== "0";
+  if (!hasBody) return undefined as T;
   return (await res.json()) as T;
 }
 
 export const api = {
-  get: <T>(path: string) => requestWithPrefix<T>("/api", path),
-  post: <T>(path: string, body?: unknown) =>
-    requestWithPrefix<T>("/api", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  put: <T>(path: string, body?: unknown) =>
-    requestWithPrefix<T>("/api", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
-  delete: <T>(path: string) => requestWithPrefix<T>("/api", path, { method: "DELETE" }),
+  get: <T>(path: string, opts?: { silent?: boolean }) => requestWithPrefix<T>("/api", path, undefined, opts),
+  post: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/api", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }, opts),
+  put: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/api", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }, opts),
+  delete: <T>(path: string, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/api", path, { method: "DELETE" }, opts),
 };
 
-// 指向 Python 编排服务的接口（线1上架流水线等）
+// 指向 Python 编排服务的接口（上架流水线等）
 export const agentApi = {
-  get: <T>(path: string) => requestWithPrefix<T>("/agent", path),
-  post: <T>(path: string, body?: unknown) =>
-    requestWithPrefix<T>("/agent", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  put: <T>(path: string, body?: unknown) =>
-    requestWithPrefix<T>("/agent", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
-  delete: <T>(path: string) => requestWithPrefix<T>("/agent", path, { method: "DELETE" }),
+  get: <T>(path: string, opts?: { silent?: boolean }) => requestWithPrefix<T>("/agent", path, undefined, opts),
+  post: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/agent", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }, opts),
+  put: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/agent", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }, opts),
+  delete: <T>(path: string, opts?: { silent?: boolean }) =>
+    requestWithPrefix<T>("/agent", path, { method: "DELETE" }, opts),
 };

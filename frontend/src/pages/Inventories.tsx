@@ -121,7 +121,7 @@ export default function Inventories() {
     <section>
       <PageHeader
         title="库存"
-        subtitle="按商品维护库存水位，支撑线二日常补货监控。"
+        subtitle="按商品维护库存水位，支撑日常补货监控。"
         icon={<Icon name="inventory" />}
       />
       {loading && (
@@ -143,80 +143,64 @@ export default function Inventories() {
             )}
           </div>
 
-          {showForm && (
-            <div className="listing-form" style={{ marginBottom: 16 }}>
-              <div className="field">
-                <span>商品 *</span>
-                <select value={form.productId || ""} onChange={(e) => setField("productId", e.target.value)}>
-                  <option value="">请选择商品</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      #{p.id} {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
-                <div className="field" style={{ flex: 1 }}>
-                  <span>当前库存 *</span>
-                  <input type="number" value={form.currentStock} onChange={(e) => setField("currentStock", e.target.value)} />
-                </div>
-                <div className="field" style={{ flex: 1 }}>
-                  <span>安全阈值 *</span>
-                  <input type="number" value={form.safeStockThreshold} onChange={(e) => setField("safeStockThreshold", e.target.value)} />
-                </div>
-              </div>
-              <div className="export-actions">
-                <button className="btn btn-primary" onClick={handleAdd} disabled={busy || !form.productId}>
-                  {busy ? "保存中…" : "保存库存"}
-                </button>
-                <button className="btn btn-secondary" onClick={() => setShowForm(false)} disabled={busy}>
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
-
           {rows.length === 0 ? (
             <EmptyState text="还没有库存记录，点右上角「新建库存」添加。" icon="📊" />
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th className="col-id">ID</th>
-                    <th>商品</th>
-                    <th>当前库存</th>
-                    <th>预留</th>
-                    <th>安全阈值</th>
-                    <th>采购周期(天)</th>
-                    <th>近7天销量</th>
-                    <th>状态</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((i) => (
-                    <tr key={i.id}>
-                      <td className="col-id">{i.id}</td>
-                      <td>{productName(i.productId)}</td>
-                      <td>{i.currentStock}</td>
-                      <td>{i.reservedStock}</td>
-                      <td>{i.safeStockThreshold}</td>
-                      <td>{i.purchaseCycleDays}</td>
-                      <td>{i.salesLast7Days}</td>
-                      <td>
-                        <StatusBadge status={i.inventoryStatus} />
-                      </td>
-                      <td>
-                        <button className="btn btn-secondary btn-sm" onClick={() => openReplenish(i)}>
-                          补货
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="entity-grid">
+              {rows.map((i) => {
+                const status = computeStatus(i.currentStock, i.safeStockThreshold);
+                const max = Math.max(i.currentStock, i.safeStockThreshold * 2, 1);
+                const fillPct = Math.min(100, (i.currentStock / max) * 100);
+                const thPct = Math.min(100, (i.safeStockThreshold / max) * 100);
+                const stockCls =
+                  status === "RISK" ? "risk" : status === "LOW" ? "low" : "enough";
+                return (
+                  <div className="inv-card" key={i.id}>
+                    <div className="inv-card-head">
+                      <span className="inv-card-title">{productName(i.productId)}</span>
+                      <StatusBadge status={i.inventoryStatus} />
+                    </div>
+                    <div className="inv-stock-row">
+                      <span className={`inv-stock ${stockCls}`}>{i.currentStock}</span>
+                      <span className="inv-stock-unit">件在库</span>
+                    </div>
+                    <div className="stock-bar" title={`当前 ${i.currentStock} / 安全阈值 ${i.safeStockThreshold}`}>
+                      <div
+                        className={`stock-bar-fill ${stockCls}`}
+                        style={{ width: `${fillPct}%` }}
+                      />
+                      <div
+                        className="stock-bar-threshold"
+                        style={{ left: `${thPct}%` }}
+                        title={`安全阈值 ${i.safeStockThreshold}`}
+                      />
+                    </div>
+                    <div className="inv-detail">
+                      <div>
+                        <div className="k">安全阈值</div>
+                        <div className="v">{i.safeStockThreshold}</div>
+                      </div>
+                      <div>
+                        <div className="k">预留</div>
+                        <div className="v">{i.reservedStock}</div>
+                      </div>
+                      <div>
+                        <div className="k">采购周期</div>
+                        <div className="v">{i.purchaseCycleDays} 天</div>
+                      </div>
+                      <div>
+                        <div className="k">近7天销量</div>
+                        <div className="v">{i.salesLast7Days}</div>
+                      </div>
+                    </div>
+                    <div className="inv-card-actions">
+                      <button className="btn btn-secondary btn-sm" onClick={() => openReplenish(i)}>
+                        补货
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -252,6 +236,58 @@ export default function Inventories() {
                 disabled={replenishBusy || !replenishValid}
               >
                 {replenishBusy ? "提交中…" : "确认补货"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <div
+          className="modal-overlay"
+          onClick={() => { setShowForm(false); setForm(EMPTY_FORM); }}
+        >
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">新建库存</div>
+            <div className="modal-body">
+              <div className="listing-form" style={{ marginTop: 0 }}>
+                <div className="field">
+                  <span>商品 *</span>
+                  <select value={form.productId || ""} onChange={(e) => setField("productId", e.target.value)}>
+                    <option value="">请选择商品</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.id} · {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
+                  <div className="field" style={{ flex: 1 }}>
+                    <span>当前库存 *</span>
+                    <input type="number" value={form.currentStock} onChange={(e) => setField("currentStock", e.target.value)} />
+                  </div>
+                  <div className="field" style={{ flex: 1 }}>
+                    <span>安全阈值 *</span>
+                    <input type="number" value={form.safeStockThreshold} onChange={(e) => setField("safeStockThreshold", e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setShowForm(false); setForm(EMPTY_FORM); }}
+                disabled={busy}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleAdd}
+                disabled={busy || !form.productId}
+              >
+                {busy ? "保存中…" : "保存库存"}
               </button>
             </div>
           </div>

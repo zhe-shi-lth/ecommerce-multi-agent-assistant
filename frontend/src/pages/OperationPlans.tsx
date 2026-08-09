@@ -1,16 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getOperationPlans } from "../api/operations";
+import { deleteOperationPlan, getOperationPlans, unpublishOperationPlan } from "../api/operations";
 import type { OperationPlan } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
+import AlertModal from "../components/AlertModal";
 import { Icon } from "../components/icons";
 
 const CONFIRM_LABEL: Record<string, string> = {
   PENDING: "待你审核",
   CONFIRMED: "已发布",
   REJECTED: "已驳回",
+};
+
+const PLATFORM_FILTERS = [
+  { key: "ALL", label: "全部平台", tone: "neutral" as const },
+  ...PLATFORMS.map((p) => ({ key: p.key, label: p.label, tone: p.tone })),
+  { key: "UNPUBLISHED", label: "未发布", tone: "warn" as const },
+];
+const TONE_COLOR: Record<string, string> = {
+  taobao: "#ff6000",
+  douyin: "#1f6fff",
+  xhs: "#ff2e4d",
+  neutral: "var(--text-2)",
+  warn: "var(--warn)",
 };
 
 function planTitle(p: OperationPlan): string {
@@ -34,6 +48,8 @@ export default function OperationPlans() {
   const [plans, setPlans] = useState<OperationPlan[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState<number | null>(null); // 正在删除/下架的计划 id
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -43,14 +59,42 @@ export default function OperationPlans() {
       .finally(() => setLoading(false));
   }, []);
 
+  async function handleUnpublish(id: number) {
+    setActing(id);
+    try {
+      const updated = await unpublishOperationPlan(id);
+      setPlans((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (confirmDelete == null) return;
+    setActing(confirmDelete);
+    try {
+      await deleteOperationPlan(confirmDelete);
+      setPlans((prev) => prev.filter((p) => p.id !== confirmDelete));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setActing(null);
+      setConfirmDelete(null);
+    }
+  }
+
   const [platform, setPlatform] = useState("ALL");
 
   // 线2 补货清单为商品级（跨平台库存监控），不受平台筛选限制，始终纳入。
   const isRestock = (p: OperationPlan) => p.line === "LINE2_RESTOCK";
-  const filtered = useMemo(
-    () => plans.filter((p) => isRestock(p) || platformMatches(p.platform, platform)),
-    [plans, platform]
-  );
+  // 未发布 = 尚未确认（confirmationStatus != CONFIRMED，含 PENDING / REJECTED）。
+  const isUnpublished = (p: OperationPlan) => (p.confirmationStatus ?? "PENDING") !== "CONFIRMED";
+  const filtered = useMemo(() => {
+    if (platform === "UNPUBLISHED") return plans.filter(isUnpublished);
+    return plans.filter((p) => isRestock(p) || platformMatches(p.platform, platform));
+  }, [plans, platform]);
   const pendingCount = filtered.filter((p) => (p.confirmationStatus ?? "PENDING") === "PENDING").length;
 
   return (
@@ -74,22 +118,19 @@ export default function OperationPlans() {
       )}
       {!loading && !error && plans.length > 0 && (
         <>
-          <div className="filter-bar" style={{ marginTop: 4 }}>
-            <div className="filter-item">
-              <label className="filter-label">平台</label>
-              <select
-                className="header-select"
-                value={platform}
-                onChange={(e) => setPlatform(e.target.value)}
+          <div className="platform-filter">
+            {PLATFORM_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                className={`pf-pill${platform === f.key ? " active" : ""}`}
+                data-tone={f.tone}
+                onClick={() => setPlatform(f.key)}
               >
-                <option value="ALL">全部平台</option>
-                {PLATFORMS.map((p) => (
-                  <option key={p.key} value={p.key}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <span className="pf-dot" style={{ background: TONE_COLOR[f.tone] }} />
+                {f.label}
+              </button>
+            ))}
           </div>
           {pendingCount > 0 && (
             <div className="notice notice-warn">有 {pendingCount} 个计划待你审核确认后才会发布商品。</div>
@@ -101,15 +142,21 @@ export default function OperationPlans() {
               {filtered.map((p) => {
                 const confirm = p.confirmationStatus ?? "PENDING";
                 const pending = confirm === "PENDING";
+                const published = confirm === "CONFIRMED";
                 const title = planTitle(p);
                 const summary = planSummary(p);
                 const restock = p.line === "LINE2_RESTOCK";
+                const busy = acting === p.id;
                 return (
-                  <button
-                    type="button"
+                  <div
                     className={`plan-card${pending ? " plan-card-pending" : ""}`}
                     key={p.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => navigate(`/operation-plans/${p.id}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") navigate(`/operation-plans/${p.id}`);
+                    }}
                   >
                     <div className="plan-card-head">
                       <span className="plan-card-title">{title}</span>
@@ -136,12 +183,49 @@ export default function OperationPlans() {
                     {p.manualReviewRequired && (
                       <div className="plan-card-flag">⚠ 需人工复核</div>
                     )}
-                  </button>
+                    <div className="plan-card-actions">
+                      {published ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          disabled={busy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnpublish(p.id);
+                          }}
+                        >
+                          {busy ? "下架中…" : "下架"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          disabled={busy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDelete(p.id);
+                          }}
+                        >
+                          {busy ? "删除中…" : "删除"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 );
               })}
             </div>
           )}
         </>
+      )}
+      {confirmDelete != null && (
+        <AlertModal
+          open
+          title="删除运营计划"
+          message={`确定删除计划 #${confirmDelete} 吗？该操作不可恢复。`}
+          confirmText="删除"
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={handleDeleteConfirm}
+        />
       )}
     </section>
   );

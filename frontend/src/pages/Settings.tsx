@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSettings, saveSettings } from "../api/settings";
 import { getCatalog, type ModelCatalog } from "../api/catalog";
 import type { Json } from "../api/types";
+import { PLATFORMS } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import { Icon } from "../components/icons";
 
@@ -15,16 +16,50 @@ interface CardSettings {
   ref_strength?: number;
 }
 
+// 平台对接凭证：一个平台一份，字段与后端 settings_store._PLATFORM_API_FIELDS 对齐。
+interface PlatformApiSettings {
+  enabled: boolean;
+  app_key: string;
+  app_secret: string;
+  endpoint: string;
+  shop_id: string;
+  access_token: string;
+}
+
 interface Settings {
   llm: CardSettings & { enabled: boolean };
   image: CardSettings & { enabled: boolean; edit_model: string; ref_strength: number };
   video: CardSettings & { enabled: boolean };
   monitor: CardSettings & { enabled: boolean };
+  order_monitor: { mode: string; success_rate: number };
+  platform_api: Record<string, PlatformApiSettings>;
   image_review_enabled: boolean;
   rag_enabled: boolean;
 }
 
 type Group = "llm" | "image" | "video" | "monitor";
+
+// 各平台在开放平台后台里的取值位置说明（面向商家/运营，不涉及内部实现）。
+const PLATFORM_API_HINTS: Record<
+  string,
+  { console: string; shopIdLabel: string; shopIdHint: string }
+> = {
+  taobao: {
+    console: "淘宝开放平台 → 应用管理，取应用的 App Key / App Secret；店铺授权后得到访问令牌。",
+    shopIdLabel: "卖家昵称",
+    shopIdHint: "淘宝店铺的卖家账号昵称。",
+  },
+  douyin: {
+    console: "抖店开放平台 → 应用详情，取 App Key / App Secret；店铺授权后得到访问令牌。",
+    shopIdLabel: "抖店店铺 ID",
+    shopIdHint: "抖店后台「店铺信息」中的店铺 ID。",
+  },
+  xiaohongshu: {
+    console: "小红书开放平台 → 应用管理，取 App Id / App Secret；店铺授权后得到访问令牌。",
+    shopIdLabel: "小红书店铺 ID",
+    shopIdHint: "小红书千帆后台的店铺（卖家）ID。",
+  },
+};
 
 // 把后端 Json 规整为本页强类型（缺字段时用默认值兜底）。
 function normalize(raw: Json): Settings {
@@ -34,6 +69,8 @@ function normalize(raw: Json): Settings {
   const image = pick("image");
   const video = pick("video");
   const monitor = pick("monitor");
+  const orderMonitor = pick("order_monitor");
+  const platformApi = pick("platform_api");
   const str = (v: Json, d = "") => (typeof v === "string" ? v : d);
   const bool = (v: Json, d = true) => (typeof v === "boolean" ? v : d);
   const num = (v: Json, d = 0.4) =>
@@ -69,6 +106,28 @@ function normalize(raw: Json): Settings {
       model: str(monitor.model, "qwen3.7-plus"),
       api_key: str(monitor.api_key),
     },
+    order_monitor: {
+      mode: str(orderMonitor.mode, "demo") || "demo",
+      success_rate: num(orderMonitor.success_rate, 0.5),
+    },
+    // 平台维度以前端 PLATFORMS 为准（与后端 PLATFORM_KEYS 一致），后端缺块时补空表单。
+    platform_api: Object.fromEntries(
+      PLATFORMS.map((p) => {
+        const raw = platformApi[p.key];
+        const b = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, Json>;
+        return [
+          p.key,
+          {
+            enabled: bool(b.enabled, false),
+            app_key: str(b.app_key),
+            app_secret: str(b.app_secret),
+            endpoint: str(b.endpoint),
+            shop_id: str(b.shop_id),
+            access_token: str(b.access_token),
+          },
+        ];
+      })
+    ),
     image_review_enabled: bool(obj.image_review_enabled, true),
     rag_enabled: bool(obj.rag_enabled, false),
   };
@@ -80,6 +139,8 @@ export default function Settings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // 动态切换：上架设置（文案/图片/视频 + 其他开关）、监控模型设置、平台对接 分成三个视图，不挤在一个长页面。
+  const [tab, setTab] = useState<"listing" | "monitor" | "platform">("listing");
 
   useEffect(() => {
     getSettings()
@@ -94,6 +155,18 @@ export default function Settings() {
     setSettings((prev) => {
       if (!prev) return prev;
       return { ...prev, [group]: { ...(prev[group] as object), ...patch } } as Settings;
+    });
+    setSaved(false);
+  }
+
+  // 平台对接：platform_api 是「平台 → 凭证」两层结构，通用 update 只能覆盖整块，这里单独处理。
+  function updatePlatform(key: string, patch: Partial<PlatformApiSettings>) {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        platform_api: { ...prev.platform_api, [key]: { ...prev.platform_api[key], ...patch } },
+      };
     });
     setSaved(false);
   }
@@ -234,101 +307,305 @@ export default function Settings() {
     );
   }
 
+  // 订单监控（地址复核）独立卡片：非 LLM 配置（mode 下拉 + 演示通过率滑条）。
+  function renderOrderMonitorCard() {
+    if (!settings) return null;
+    const om = settings.order_monitor;
+    return (
+      <>
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>复核模式</span>
+          <select value={om.mode} onChange={(e) => update("order_monitor", { mode: e.target.value })}>
+            <option value="demo">演示态（随机通过/拦截，演练用）</option>
+            <option value="real">生产态（调平台地址完整标记）</option>
+          </select>
+        </div>
+
+        {om.mode === "demo" && (
+          <div className="field" style={{ marginBottom: 12 }}>
+            <span>
+              演示通过率：{(om.success_rate * 100).toFixed(0)}%
+              <br />
+              <small className="muted">
+                随机通过概率，用于演练「通过/拦截」两个分支；不代表真实平台结果。生产环境请切换为真实模式。
+              </small>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={om.success_rate}
+              onChange={(e) => update("order_monitor", { success_rate: Number(e.target.value) })}
+            />
+          </div>
+        )}
+
+        <p className="muted" style={{ marginTop: 8 }}>
+          商家在订单详情点「确认地址已补全」时，本 Agent 先向订单来源复核地址是否真已补全，再决定能否流转状态，避免盲目信任人工操作。
+          生产态需在后端接入平台开放 API（读取 address_complete）后方可将模式置为 real。
+        </p>
+      </>
+    );
+  }
+
+  // 平台对接卡片：一个电商平台一张，填开放平台给到的应用凭证 + 店铺授权令牌。
+  function renderPlatformCard(key: string, label: string) {
+    if (!settings) return null;
+    const p = settings.platform_api[key];
+    if (!p) return null;
+    const hint = PLATFORM_API_HINTS[key];
+    const ready = p.enabled && !!p.app_key && !!p.app_secret && !!p.access_token;
+    const tone = !p.enabled ? "badge-neutral" : ready ? "badge-ok" : "badge-warn";
+    return (
+      <div className="card listing-review" key={key}>
+        <h3 style={{ marginTop: 0 }}>
+          {label}
+          <span className={`badge ${tone}`} style={{ marginLeft: 10 }}>
+            {p.enabled ? (ready ? "已就绪" : "凭证不完整") : "未开启"}
+          </span>
+        </h3>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={p.enabled}
+            onChange={(e) => updatePlatform(key, { enabled: e.target.checked })}
+          />
+          <span>开启{label}对接（关闭则不从该平台取数）</span>
+        </label>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            App Key
+            <br />
+            <small className="muted">{hint?.console}</small>
+          </span>
+          <input
+            value={p.app_key}
+            placeholder="开放平台应用的 App Key"
+            autoComplete="off"
+            onChange={(e) => updatePlatform(key, { app_key: e.target.value })}
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>App Secret</span>
+          <input
+            type="password"
+            value={p.app_secret}
+            placeholder="开放平台应用的密钥"
+            autoComplete="off"
+            onChange={(e) => updatePlatform(key, { app_secret: e.target.value })}
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            店铺授权令牌
+            <br />
+            <small className="muted">店铺完成授权后拿到的访问令牌，缺它无法读取该店订单。</small>
+          </span>
+          <input
+            type="password"
+            value={p.access_token}
+            placeholder="店铺授权后获得的访问令牌"
+            autoComplete="off"
+            onChange={(e) => updatePlatform(key, { access_token: e.target.value })}
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <span>
+            {hint?.shopIdLabel ?? "店铺 ID"}
+            <br />
+            <small className="muted">{hint?.shopIdHint}</small>
+          </span>
+          <input
+            value={p.shop_id}
+            placeholder="选填，多店铺时用于区分"
+            autoComplete="off"
+            onChange={(e) => updatePlatform(key, { shop_id: e.target.value })}
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 0 }}>
+          <span>
+            接口地址（选填）
+            <br />
+            <small className="muted">留空即使用该平台的官方地址；只有走沙箱或自建代理时才需要填。</small>
+          </span>
+          <input
+            value={p.endpoint}
+            placeholder="https://..."
+            autoComplete="off"
+            onChange={(e) => updatePlatform(key, { endpoint: e.target.value })}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <section>
       <PageHeader
         title="设置中心"
-        subtitle="按用途组织：文案生成、商品图片生成。每张卡片选厂家+模型，Base URL 由厂家与模型自动派生（不再手填模型名），互不借用、互不借 Key。"
+        subtitle="按用途组织：上架设置（文案 / 图片 / 视频）、监控模型设置、平台对接（各电商平台的订单接口凭证）。每张模型卡片各自选厂家+模型，Base URL 自动派生，互不借用、互不借 Key。"
         icon={<Icon name="settings" />}
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
       {saved && <div className="notice notice-ok">已保存，后续生成按新设定执行。</div>}
 
-      <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>文案生成模型</h3>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={settings.llm.enabled}
-            onChange={(e) => update("llm", { enabled: e.target.checked })}
-          />
-          <span>启用文案生成（关闭则 Agent 走规则实现，不调用大模型）</span>
-        </label>
-        {renderCardBody("llm")}
-        <p className="muted" style={{ marginTop: 8 }}>
-          用于根据商品信息与商家备注，自动生成商品文案（卖点、标题、详情等）。
-        </p>
+      <div className="settings-tabs">
+        <button
+          className={`settings-tab${tab === "listing" ? " active" : ""}`}
+          onClick={() => setTab("listing")}
+        >
+          <Icon name="new" /> 上架设置
+        </button>
+        <button
+          className={`settings-tab${tab === "monitor" ? " active" : ""}`}
+          onClick={() => setTab("monitor")}
+        >
+          <Icon name="dashboard" /> 监控模型设置
+        </button>
+        <button
+          className={`settings-tab${tab === "platform" ? " active" : ""}`}
+          onClick={() => setTab("platform")}
+        >
+          <Icon name="simulator" /> 平台对接
+        </button>
       </div>
 
-      <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>商品图片生成模型</h3>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={settings.image.enabled}
-            onChange={(e) => update("image", { enabled: e.target.checked })}
-          />
-          <span>启用商品图片生成（关闭则走规则占位图）</span>
-        </label>
-        {renderCardBody("image")}
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>
-            参考图保留程度（ref_strength）：{settings.image.ref_strength.toFixed(2)}
-            <br />
-            <small className="muted">
-              仅在你上传参考图、走「图生图」时生效：越低=原图改动越大；越高=越保留原图。不传参考图时系统自动用「文生图」。
-            </small>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={settings.image.ref_strength}
-            onChange={(e) => update("image", { ref_strength: Number(e.target.value) })}
-          />
-        </div>
-        <p className="muted" style={{ marginTop: 8 }}>
-          用于生成商品主图。是否走「图生图」由你在上架流程里是否上传参考图决定，无需在此单独选择模型。
-        </p>
-      </div>
+      {tab === "listing" && (
+        <>
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>文案生成模型</h3>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.llm.enabled}
+                onChange={(e) => update("llm", { enabled: e.target.checked })}
+              />
+              <span>启用文案生成（关闭则 Agent 走规则实现，不调用大模型）</span>
+            </label>
+            {renderCardBody("llm")}
+            <p className="muted" style={{ marginTop: 8 }}>
+              用于根据商品信息与商家备注，自动生成商品文案（卖点、标题、详情等）。
+            </p>
+          </div>
 
-      <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>库存监控模型（线2 智能预警）</h3>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={settings.monitor.enabled}
-            onChange={(e) => update("monitor", { enabled: e.target.checked })}
-          />
-          <span>启用库存监控大模型（关闭或配置错误时，按可售天数&lt;5天红线预警，不报错）</span>
-        </label>
-        {renderCardBody("monitor")}
-        <p className="muted" style={{ marginTop: 8 }}>
-          用于「销售监控」页的库存预警：判断未来 30 天可能推高销量的大促/节日，给出智能预警。
-          未启用或配置错误时自动降级为红线预警（仅按可售天数）。
-        </p>
-      </div>
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>商品图片生成模型</h3>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.image.enabled}
+                onChange={(e) => update("image", { enabled: e.target.checked })}
+              />
+              <span>启用商品图片生成（关闭则走规则占位图）</span>
+            </label>
+            {renderCardBody("image")}
+            <div className="field" style={{ marginBottom: 12 }}>
+              <span>
+                参考图保留程度（ref_strength）：{settings.image.ref_strength.toFixed(2)}
+                <br />
+                <small className="muted">
+                  仅在你上传参考图、走「图生图」时生效：越低=原图改动越大；越高=越保留原图。不传参考图时系统自动用「文生图」。
+                </small>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={settings.image.ref_strength}
+                onChange={(e) => update("image", { ref_strength: Number(e.target.value) })}
+              />
+            </div>
+            <p className="muted" style={{ marginTop: 8 }}>
+              用于生成商品主图。是否走「图生图」由你在上架流程里是否上传参考图决定，无需在此单独选择模型。
+            </p>
+          </div>
 
-      <div className="card listing-review">
-        <h3 style={{ marginTop: 0 }}>其他开关</h3>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={settings.image_review_enabled}
-            onChange={(e) => setSettings((p) => (p ? { ...p, image_review_enabled: e.target.checked } : p))}
-          />
-          <span>图片视觉审核</span>
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={settings.rag_enabled}
-            onChange={(e) => setSettings((p) => (p ? { ...p, rag_enabled: e.target.checked } : p))}
-          />
-          <span>分类知识库 RAG（需本地嵌入模型可用）</span>
-        </label>
-      </div>
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>视频生成模型</h3>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.video.enabled}
+                onChange={(e) => update("video", { enabled: e.target.checked })}
+              />
+              <span>启用视频生成（关闭则 Agent 跳过视频生成，不调用大模型）</span>
+            </label>
+            {renderCardBody("video")}
+            <p className="muted" style={{ marginTop: 8 }}>
+              用于在上架流程中，根据商品主图/文案生成商品宣传短视频（如万相、欢乐马等视频生成模型）。
+            </p>
+          </div>
+
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>其他开关</h3>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.image_review_enabled}
+                onChange={(e) => setSettings((p) => (p ? { ...p, image_review_enabled: e.target.checked } : p))}
+              />
+              <span>图片视觉审核</span>
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.rag_enabled}
+                onChange={(e) => setSettings((p) => (p ? { ...p, rag_enabled: e.target.checked } : p))}
+              />
+              <span>分类知识库 RAG（需本地嵌入模型可用）</span>
+            </label>
+          </div>
+        </>
+      )}
+
+      {tab === "monitor" && (
+        <>
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>库存监控模型</h3>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.monitor.enabled}
+                onChange={(e) => update("monitor", { enabled: e.target.checked })}
+              />
+              <span>启用库存监控大模型（关闭或配置错误时，按可售天数&lt;5天红线预警，不报错）</span>
+            </label>
+            {renderCardBody("monitor")}
+            <p className="muted" style={{ marginTop: 8 }}>
+              用于「销售监控」页的库存预警：判断未来 30 天可能推高销量的大促/节日，给出智能预警。
+              未启用或配置错误时自动降级为红线预警（仅按可售天数）。
+            </p>
+          </div>
+
+          <div className="card listing-review">
+            <h3 style={{ marginTop: 0 }}>订单监控（地址复核）</h3>
+            {renderOrderMonitorCard()}
+          </div>
+        </>
+      )}
+
+      {tab === "platform" && (
+        <>
+          <div className="notice notice-warn" style={{ justifyContent: "flex-start" }}>
+            <span>
+              当前系统使用<strong>模拟订单数据</strong>运行，所有页面与流程都已按真实拉单打通。
+              在下面填好各平台的对接凭证、并由运维把订单来源切到真实平台后，
+              订单会改为从平台开放 API 拉取，<strong>页面与操作方式完全不变</strong>。
+            </span>
+          </div>
+          <p className="muted" style={{ marginTop: 0 }}>
+            凭证只保存在本系统后端，不会写进代码或配置文件；未开启的平台不会被访问。
+          </p>
+          {PLATFORMS.map((p) => renderPlatformCard(p.key, p.label))}
+        </>
+      )}
 
       <div className="export-actions">
         <button className="btn btn-primary" onClick={handleSave} disabled={busy}>

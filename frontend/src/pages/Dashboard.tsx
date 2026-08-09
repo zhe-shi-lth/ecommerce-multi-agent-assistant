@@ -306,7 +306,7 @@ export default function Dashboard() {
           </div>
         ) : warnings.length > 0 ? (
           <div className="notice notice-warn">
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>库存预警（线2 · 可售天数 &lt; 5 天）</div>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>库存预警（可售天数 &lt; 5 天）</div>
             {warnings.map((w) => (
               <div key={w.productId} style={{ marginBottom: 6 }}>
                 <strong>{w.productName}</strong>

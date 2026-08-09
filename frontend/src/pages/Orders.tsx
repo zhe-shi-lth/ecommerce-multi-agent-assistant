@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getOrders } from "../api/orders";
 import { getProducts } from "../api/products";
 import type { Order, Product } from "../api/types";
@@ -57,6 +58,7 @@ export default function Orders() {
   const [products, setProducts] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
@@ -91,14 +93,6 @@ export default function Orders() {
     if (!o.addressComplete) n++;
     if (o.status === "INSUFFICIENT_STOCK" || o.manualReviewRequired) n++;
     return n;
-  }
-  function issuesOf(o: Order): string[] {
-    const list: string[] = [];
-    if (!o.paid) list.push("订单未付款");
-    if (!o.addressComplete) list.push("收货地址不完整");
-    if (o.status === "INSUFFICIENT_STOCK") list.push("库存不足");
-    if (o.manualReviewRequired) list.push("需人工审核履约");
-    return list;
   }
 
   // 任一筛选条件变化 → 回到第 1 页
@@ -302,58 +296,47 @@ export default function Orders() {
           <div className="order-list">
             {paged.map((o) => {
               const meta = statusMeta(o.status);
-              const issues = issuesOf(o);
+              const issueN = issueCount(o);
               return (
-                <div className="card order-card" key={o.id}>
-                  <div className="order-head">
-                    <div>
-                      <span className="order-id">订单 #{o.id}</span>
-                      <span className="muted order-time">{fmtTime(o.createdAt)}</span>
-                    </div>
-                    <div className="order-head-badges">
-                      <Badge label={meta.label} tone={meta.tone} />
+                <div
+                  className="order-row"
+                  key={o.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/orders/${o.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") navigate(`/orders/${o.id}`);
+                  }}
+                >
+                  <div className="order-row-id">
+                    <div>订单 #{o.id}</div>
+                    <div className="order-row-time">{fmtTime(o.createdAt)}</div>
+                  </div>
+
+                  <div className="order-row-main">
+                    <div className="order-row-prod">
+                      <span className="name">{productName(o.productId)}</span>
+                      <span className="qty">× {o.quantity}</span>
                       <span className={`badge badge-${platformTone(o.platform)}`}>
                         {platformLabel(o.platform)}
                       </span>
                     </div>
-                  </div>
-
-                  <div className="order-product">
-                    {productName(o.productId)}
-                    <span className="order-qty">× {o.quantity}</span>
-                  </div>
-
-                  <div className="order-meta">
-                    <div className="order-meta-item">
-                      <span className="muted">付款</span>
-                      <Badge label={o.paid ? "已付款" : "未付款"} tone={o.paid ? "ok" : "neutral"} />
-                    </div>
-                    <div className="order-meta-item">
-                      <span className="muted">收货地址</span>
-                      <Badge
-                        label={o.addressComplete ? "完整" : "不完整"}
-                        tone={o.addressComplete ? "ok" : "bad"}
-                      />
-                    </div>
-                    <div className="order-meta-item">
-                      <span className="muted">履约建议</span>
-                      <Badge label={meta.label} tone={meta.tone} />
-                    </div>
-                    <div className="order-meta-item">
-                      <span className="muted">人工审核</span>
-                      <Badge
-                        label={o.manualReviewRequired ? "需审核" : "系统自动"}
-                        tone={o.manualReviewRequired ? "warn" : "neutral"}
-                      />
+                    <div className="order-row-mini">
+                      <span className={`mini ${o.paid ? "ok" : "neutral"}`}>
+                        {o.paid ? "已付款" : "未付款"}
+                      </span>
+                      <span className={`mini ${o.addressComplete ? "ok" : "bad"}`}>
+                        {o.addressComplete ? "地址完整" : "地址不全"}
+                      </span>
+                      {o.manualReviewRequired && <span className="mini warn">需审核</span>}
+                      {issueN > 0 && <span className="mini bad">待处理 {issueN}</span>}
                     </div>
                   </div>
 
-                  {issues.length > 0 && (
-                    <div className="notice notice-warn order-issues">
-                      <strong>待处理：</strong>
-                      {issues.join(" · ")}
-                    </div>
-                  )}
+                  <div className="order-row-right">
+                    <Badge label={meta.label} tone={meta.tone} />
+                    <span className="order-chevron">›</span>
+                  </div>
                 </div>
               );
             })}

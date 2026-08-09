@@ -1,19 +1,20 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { confirmOperationPlan, createFavoriteCopy, exportOperationPlan, getOperationPlan, rejectOperationPlan } from "../api/operations";
-import { getAgentRunsByPlan } from "../api/agents";
-import type { AgentRun, Json, OperationPlan } from "../api/types";
+import { useNavigate, useParams } from "react-router-dom";
+import { confirmOperationPlan, exportOperationPlan, getOperationPlan, rejectOperationPlan } from "../api/operations";
+import type { Json, OperationPlan } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
-import JsonView from "../components/JsonView";
-import PlanFields from "../components/PlanView";
 import { platformLabel, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
-import AlertModal from "../components/AlertModal";
 import { Icon } from "../components/icons";
 
-interface PlanBlock {
-  title: string;
-  data: Record<string, Json> | null;
+function asStr(v: Json | undefined): string {
+  return typeof v === "string" ? v : "";
+}
+function asArr(v: Json | undefined): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+function asObj(v: Json | undefined): Record<string, Json> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, Json>) : null;
 }
 
 const CONFIRM_LABEL: Record<string, string> = {
@@ -25,23 +26,23 @@ const CONFIRM_LABEL: Record<string, string> = {
 export default function OperationPlanDetail() {
   const { id } = useParams();
   const planId = Number(id);
+  const navigate = useNavigate();
   const [plan, setPlan] = useState<OperationPlan | null>(null);
-  const [runs, setRuns] = useState<AgentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [actionKind, setActionKind] = useState<"confirm" | "reject" | null>(null);
   const [acting, setActing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [exportContent, setExportContent] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [favSaved, setFavSaved] = useState(false);
 
   useEffect(() => {
-    Promise.all([getOperationPlan(planId), getAgentRunsByPlan(planId)])
-      .then(([p, r]) => {
+    getOperationPlan(planId)
+      .then((p) => {
         setPlan(p);
-        setRuns(r);
+        // 已发布的计划直接带出该平台文案，供复制粘贴
+        if ((p.confirmationStatus ?? "PENDING") === "CONFIRMED") {
+          exportOperationPlan(planId, p.platform)
+            .then((res) => setExportContent(res.content))
+            .catch(() => {});
+        }
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -62,31 +63,21 @@ export default function OperationPlanDetail() {
 
   async function handleDecision(kind: "confirm" | "reject") {
     setActing(true);
-    setActionError(null);
-    setActionKind(kind);
     try {
       const updated =
         kind === "confirm"
           ? await confirmOperationPlan(planId)
           : await rejectOperationPlan(planId);
       setPlan(updated);
-    } catch (e) {
-      setActionError(String(e));
+      // 同意后一并产出该平台文案，免去单独的「导出」按钮
+      if (kind === "confirm") {
+        const exp = await exportOperationPlan(planId, updated.platform);
+        setExportContent(exp.content);
+      }
+    } catch {
+      // 失败由全局错误弹窗（client.ts → errorBus → App 的 AlertModal）统一提示，避免重复弹窗
     } finally {
       setActing(false);
-    }
-  }
-
-  async function handleExport(platform: string) {
-    setExporting(true);
-    setExportError(null);
-    try {
-      const res = await exportOperationPlan(planId, platform);
-      setExportContent(res.content);
-    } catch (e) {
-      setExportError(String(e));
-    } finally {
-      setExporting(false);
     }
   }
 
@@ -96,26 +87,19 @@ export default function OperationPlanDetail() {
     }
   }
 
-  async function handleFavorite() {
-    if (!plan) return;
-    try {
-      const exp = await exportOperationPlan(planId, "taobao");
-      const label =
-        (plan.productPlanJson?.["recommended_title"] as string) || `计划 ${plan.id} 文案`;
-      await createFavoriteCopy({ label, content: exp.content, sourcePlanId: plan.id });
-      setFavSaved(true);
-      setTimeout(() => setFavSaved(false), 2000);
-    } catch (e) {
-      setExportError(String(e));
-    }
-  }
-
-  const blocks: PlanBlock[] = [
-    { title: "商品规划", data: plan.productPlanJson },
-    { title: "图片创意", data: plan.imagePlanJson },
-    { title: "库存采购", data: plan.inventoryPlanJson },
-    { title: "订单履约", data: plan.fulfillmentPlanJson },
-  ];
+  const product = asObj(plan.productPlanJson);
+  const image = asObj(plan.imagePlanJson);
+  const title = product ? asStr(product["recommended_title"]) : "";
+  const desc = product ? asStr(product["detail_description"]) : "";
+  const points = product ? asArr(product["selling_points"]) : [];
+  const keywords = product ? asArr(product["seo_keywords"]) : [];
+  const listing = product ? asStr(product["listing_suggestion"]) : "";
+  const copies = product ? asObj(product["platform_copies"]) : null;
+  const platformCopy = copies ? asStr(copies[plan.platform]) : "";
+  // 图片创意只保留主图（场景图/营销图为内部素材，不向用户展示）
+  const mainImage = image ? asStr(image["main_image_url"]) : "";
+  const imgStyle = image ? asStr(image["image_style"]) : "";
+  const riskNotes = image ? asArr(image["image_risk_notes"]) : [];
 
   return (
     <section>
@@ -123,6 +107,11 @@ export default function OperationPlanDetail() {
         title={`运营计划 #${plan.id}`}
         subtitle={`Trace ${plan.traceId}`}
         icon={<Icon name="plans" />}
+        actions={
+          <button className="btn btn-secondary" onClick={() => navigate("/operation-plans")}>
+            <Icon name="logout" /> 返回列表
+          </button>
+        }
       />
       <div className="meta">
         <span>状态: <StatusBadge status={plan.status} /></span>
@@ -141,7 +130,7 @@ export default function OperationPlanDetail() {
               <button className="btn btn-secondary" onClick={() => handleDecision("reject")} disabled={acting}>
                 {acting ? "处理中…" : "驳回计划"}
               </button>
-              <span className="muted">同意后将由线2审核库存（需 currentStock &gt; 安全阈值），通过才发布商品</span>
+              <span className="muted">同意后将由库存审核（需当前库存 &gt; 安全阈值），通过才发布商品</span>
             </>
           ) : (
             <p className="muted">
@@ -150,41 +139,17 @@ export default function OperationPlanDetail() {
               {plan.auditMessage ? ` — ${plan.auditMessage}` : ""}
             </p>
           )}
-          {actionError && (
-            <AlertModal
-              open={!!actionError}
-              title={actionKind === "reject" ? "无法驳回计划" : "无法发布"}
-              message={actionError}
-              onClose={() => setActionError(null)}
-            />
-          )}
         </div>
 
-        <div className="export-actions">
-          <span className="muted">导出到：</span>
-          <button className="btn btn-secondary" onClick={() => handleExport("taobao")} disabled={exporting}>
-            淘宝
-          </button>
-          <button className="btn btn-secondary" onClick={() => handleExport("douyin")} disabled={exporting}>
-            抖音
-          </button>
-          <button className="btn btn-secondary" onClick={() => handleExport("xiaohongshu")} disabled={exporting}>
-            小红书
-          </button>
-          <button className="btn btn-secondary" onClick={handleFavorite} disabled={exporting}>
-            收藏文案
-          </button>
-          {exporting && <span className="muted">生成中…</span>}
-          {favSaved && <span className="muted">已收藏</span>}
-          {exportError && <span className="error">导出失败：{exportError}</span>}
-        </div>
         {exportContent && (
           <div className="export-result">
             <div className="export-result-head">
-              <span>已生成，可复制粘贴：</span>
-              <button className="btn btn-secondary btn-sm" onClick={copyExport}>
-                复制
-              </button>
+              <span>已生成{platformLabel(plan.platform)}文案，可复制粘贴到对应平台：</span>
+              <div className="export-result-actions">
+                <button className="btn btn-secondary btn-sm" onClick={copyExport}>
+                  复制
+                </button>
+              </div>
             </div>
             <textarea readOnly value={exportContent} rows={10} />
           </div>
@@ -198,41 +163,76 @@ export default function OperationPlanDetail() {
         <p style={{ margin: 0 }}>{plan.finalSummary}</p>
       </div>
 
-      <h3 style={{ marginBottom: 12 }}>方案详情</h3>
-      <div className="plan-blocks">
-        {blocks.map((b) => (
-          <div className="plan-block" key={b.title}>
-            <h4>{b.title}</h4>
-            <PlanFields data={b.data as { [key: string]: Json } | null} />
-          </div>
-        ))}
+      <div className="card">
+        <div className="card-header">
+          <h3>商品规划</h3>
+        </div>
+        <div className="detail">
+          {title && <div className="detail-title">{title}</div>}
+          {desc && <p className="detail-desc">{desc}</p>}
+          {points.length > 0 && (
+            <div className="detail-section">
+              <div className="detail-label">卖点</div>
+              <ul className="detail-points">
+                {points.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {keywords.length > 0 && (
+            <div className="detail-section">
+              <div className="detail-label">SEO 关键词</div>
+              <div className="detail-tags">
+                {keywords.map((k, i) => (
+                  <span className="tag" key={i}>{k}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {platformCopy && (
+            <div className="detail-section">
+              <div className="detail-label">{platformLabel(plan.platform)} 平台文案</div>
+              <div className="detail-copy">{platformCopy}</div>
+            </div>
+          )}
+          {listing && (
+            <div className="detail-section">
+              <div className="detail-label">上架建议</div>
+              <p className="detail-note">{listing}</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <details className="runs-wrap">
-        <summary className="runs-summary">执行记录（技术详情，{runs.length} 条）</summary>
-        <div className="runs">
-          {runs.map((r) => (
-            <details className="run" key={r.id}>
-              <summary>
-                <StatusBadge status={r.status} />
-                <span className="agent-name">{r.agentName}</span>
-                <span className="muted">{r.durationMs !== null ? `${r.durationMs} ms` : "—"}</span>
-              </summary>
-              {r.errorMessage && <p className="error">错误：{r.errorMessage}</p>}
-              <div className="run-io">
-                <div>
-                  <h5>输入</h5>
-                  <JsonView data={r.inputJson as Json | null} />
-                </div>
-                <div>
-                  <h5>输出</h5>
-                  <JsonView data={r.outputJson as Json | null} />
-                </div>
-              </div>
-            </details>
-          ))}
+      <div className="card">
+        <div className="card-header">
+          <h3>图片创意</h3>
         </div>
-      </details>
+        <div className="detail">
+          {mainImage ? (
+            <img className="detail-hero" src={mainImage} alt="商品主图" />
+          ) : (
+            <div className="detail-img-empty">（未生成主图）</div>
+          )}
+          {imgStyle && (
+            <div className="detail-section">
+              <div className="detail-label">图片风格</div>
+              <p className="detail-note">{imgStyle}</p>
+            </div>
+          )}
+          {riskNotes.length > 0 && (
+            <div className="detail-section">
+              <div className="detail-label">图片风险提示</div>
+              <ul className="detail-points">
+                {riskNotes.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

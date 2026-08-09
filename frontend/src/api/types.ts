@@ -76,23 +76,29 @@ export interface Order {
   id: number;
   productId: number;
   platform: string;
+  // 平台侧订单号（可拿去平台后台核对同一笔订单）；老数据可能为空
+  platformOrderId?: string;
   quantity: number;
   status: string;
   addressComplete: boolean;
   paid: boolean;
   manualReviewRequired: boolean;
   fulfillmentSuggestionStatus: string;
+  fulfillmentPlanJson?: Record<string, Json> | null;
+  receiverName?: string | null;
+  receiverPhone?: string | null;
+  receiverProvince?: string | null;
+  receiverCity?: string | null;
+  receiverDistrict?: string | null;
+  receiverDetail?: string | null;
+  buyerNick?: string | null;
+  payment?: number | string | null;
+  postFee?: number | string | null;
+  logisticsCompany?: string | null;
+  waybillNo?: string | null;
+  encrypted?: boolean | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface FavoriteCopy {
-  id: number;
-  label: string;
-  content: string;
-  tags: string | null;
-  sourcePlanId: number | null;
-  createdAt: string;
 }
 
 export interface DailySales {

@@ -1,18 +1,17 @@
 import { useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import OperationPlans from "./pages/OperationPlans";
 import OperationPlanDetail from "./pages/OperationPlanDetail";
 import Products from "./pages/Products";
 import Inventories from "./pages/Inventories";
 import Orders from "./pages/Orders";
-import Favorites from "./pages/Favorites";
+import OrderDetail from "./pages/OrderDetail";
 import Dashboard from "./pages/Dashboard";
 import NewListing from "./pages/NewListing";
 import Settings from "./pages/Settings";
 import Simulator from "./pages/Simulator";
 import Login from "./pages/Login";
 import UserMonitoring from "./pages/UserMonitoring";
-import Test from "./pages/Test";
 import { clearToken, isAuthed, isSuperAdmin, setRole } from "./auth";
 import { api } from "./api/client";
 import { onAppError } from "./api/errorBus";
@@ -21,6 +20,7 @@ import { Icon } from "./components/icons";
 
 export default function App() {
   const authed = isAuthed();
+  const loc = useLocation();
   // 启动校验：本地有 token 时先向后端 /auth/me 验真，期间显示加载态，避免闪现主页；
   // 验真失败（过期/无效）清 token 回登录页。无 token 则无需校验，直接走登录路由。
   const [checking, setChecking] = useState(authed);
@@ -117,10 +117,6 @@ export default function App() {
             <Icon name="simulator" />
             平台模拟
           </NavLink>
-          <NavLink to="/favorites" className="nav-link">
-            <Icon name="favorites" />
-            收藏夹
-          </NavLink>
           <div className="nav-group">配置</div>
           <NavLink to="/settings" className="nav-link">
             <Icon name="settings" />
@@ -133,12 +129,6 @@ export default function App() {
             <NavLink to="/user-monitoring" className="nav-link">
               <Icon name="usermonitor" />
               用户监控
-            </NavLink>
-          )}
-          {isSuperAdmin() && (
-            <NavLink to="/test" className="nav-link">
-              <Icon name="test" />
-              测试
             </NavLink>
           )}
         </nav>
@@ -157,14 +147,12 @@ export default function App() {
       />
       <main className="content">
         <Routes>
-          <Route path="/" element={<NewListing />} />
           <Route path="/operation-plans" element={<OperationPlans />} />
           <Route path="/operation-plans/:id" element={<OperationPlanDetail />} />
-          <Route path="/new-listing" element={<NewListing />} />
           <Route path="/products" element={<Products />} />
           <Route path="/inventories" element={<Inventories />} />
           <Route path="/orders" element={<Orders />} />
-          <Route path="/favorites" element={<Favorites />} />
+          <Route path="/orders/:id" element={<OrderDetail />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/simulator" element={<Simulator />} />
           <Route path="/settings" element={<Settings />} />
@@ -176,16 +164,17 @@ export default function App() {
               </RequireSuperAdmin>
             }
           />
-          <Route
-            path="/test"
-            element={
-              <RequireSuperAdmin>
-                <Test />
-              </RequireSuperAdmin>
-            }
-          />
           <Route path="/login" element={<Navigate to="/" replace />} />
         </Routes>
+        {/* 新品上架向导常驻挂载：切到其他 tab 时仅隐藏（display:none），不在进行的
+           生成 / 视频轮询中被中断；回到该页继续显示「生成中」或「生成完成」，无需重来。 */}
+        <div
+          className="keep-alive"
+          style={{ display: loc.pathname === "/" || loc.pathname === "/new-listing" ? "block" : "none" }}
+          aria-hidden={loc.pathname !== "/" && loc.pathname !== "/new-listing"}
+        >
+          <NewListing />
+        </div>
       </main>
     </div>
   );

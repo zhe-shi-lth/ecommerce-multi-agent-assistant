@@ -84,7 +84,7 @@ export default function Products() {
     <section>
       <PageHeader
         title="商品"
-        subtitle="管理品类基础数据与商品目录。商品是线一上架的源头。"
+        subtitle="管理品类基础数据与商品目录。商品是上架流程的起点。"
         icon={<Icon name="products" />}
       />
       {loading && (
@@ -119,45 +119,110 @@ export default function Products() {
                 ))
               )}
             </div>
-
-            {showCatForm && (
-              <div className="cat-add-inline" style={{ marginTop: 12 }}>
-                <input
-                  value={catName}
-                  onChange={(e) => setCatName(e.target.value)}
-                  placeholder="如：家居 / 美妆"
-                />
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={handleAddCategory}
-                  disabled={busy || !catName.trim()}
-                >
-                  {busy ? "保存中…" : "保存"}
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setShowCatForm(false)}
-                  disabled={busy}
-                >
-                  取消
-                </button>
-              </div>
-            )}
           </div>
 
           {/* 板块二：商品管理 */}
           <div className="card">
             <div className="card-header">
               <h3>商品</h3>
-              {!showProductForm && (
-                <button className="btn btn-primary btn-sm" onClick={() => setShowProductForm(true)}>
-                  新建商品
-                </button>
-              )}
-            </div>
+            {!showProductForm && (
+              <button className="btn btn-primary btn-sm" onClick={() => setShowProductForm(true)}>
+                新建商品
+              </button>
+            )}
+          </div>
 
-            {showProductForm && (
-              <div className="listing-form" style={{ marginBottom: 16 }}>
+          {rows.length === 0 ? (
+              <EmptyState text="还没有商品，点右上角「新建商品」添加。" icon="📦" />
+            ) : (
+              <div className="entity-grid">
+                {rows.map((p) => (
+                  <div className="prod-card" key={p.id}>
+                    <div className="prod-card-head">
+                      <span className="prod-card-title">{p.name}</span>
+                      <StatusBadge status={p.status} />
+                    </div>
+                    {p.description && <p className="prod-card-desc">{p.description}</p>}
+                    <div className="prod-card-prices">
+                      <div className="prod-price">
+                        <span className="k">成本价</span>
+                        <span className="v">¥{p.costPrice}</span>
+                      </div>
+                      <div className="prod-price sale">
+                        <span className="k">售价</span>
+                        <span className="v">¥{p.salePrice}</span>
+                      </div>
+                      <div className="prod-price">
+                        <span className="k">毛利</span>
+                        <span className="v">{p.salePrice - p.costPrice}</span>
+                      </div>
+                    </div>
+                    <div className="prod-card-meta">
+                      <span>类目：{p.category}</span>
+                      {p.targetAudience && <span>目标：{p.targetAudience}</span>}
+                      {p.usageScenario && <span className="muted">场景：{p.usageScenario}</span>}
+                    </div>
+                    <div className="prod-card-actions">
+                      {p.status === "PUBLISHED" ? (
+                        <span className="ci-meta">已发布</span>
+                      ) : (
+                        <span className="ci-meta" title="发布需走：新品上架 → 运营计划 → 同意（库存审核）">
+                          经运营计划发布
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {showCatForm && (
+        <div className="modal-overlay" onClick={() => { setShowCatForm(false); setCatName(""); }}>
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">新建品类</div>
+            <div className="modal-body">
+              <div className="field" style={{ marginTop: 0 }}>
+                <span>品类名称 *</span>
+                <input
+                  value={catName}
+                  onChange={(e) => setCatName(e.target.value)}
+                  placeholder="如：家居 / 美妆"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setShowCatForm(false); setCatName(""); }}
+                disabled={busy}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleAddCategory}
+                disabled={busy || !catName.trim()}
+              >
+                {busy ? "保存中…" : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProductForm && (
+        <div
+          className="modal-overlay"
+          onClick={() => { setShowProductForm(false); setForm(EMPTY_FORM); }}
+        >
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">新建商品</div>
+            <div className="modal-body">
+              <div className="listing-form" style={{ marginTop: 0 }}>
                 <div className="field">
                   <span>名称 *</span>
                   <input value={form.name} onChange={(e) => setField("name", e.target.value)} />
@@ -195,67 +260,26 @@ export default function Products() {
                   <span>使用场景</span>
                   <input value={form.usageScenario ?? ""} onChange={(e) => setField("usageScenario", e.target.value)} />
                 </div>
-                <div className="export-actions">
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleAddProduct}
-                    disabled={busy || !form.name || !form.category || !form.description}
-                  >
-                    {busy ? "保存中…" : "保存商品"}
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => setShowProductForm(false)} disabled={busy}>
-                    取消
-                  </button>
-                </div>
               </div>
-            )}
-
-            {rows.length === 0 ? (
-              <EmptyState text="还没有商品，点右上角「新建商品」添加。" icon="📦" />
-            ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th className="col-id">ID</th>
-                      <th>名称</th>
-                      <th>类目</th>
-                      <th>成本</th>
-                      <th>售价</th>
-                      <th>目标用户</th>
-                      <th>状态</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((p) => (
-                      <tr key={p.id}>
-                        <td className="col-id">{p.id}</td>
-                        <td>{p.name}</td>
-                        <td>{p.category}</td>
-                        <td>{p.costPrice}</td>
-                        <td>{p.salePrice}</td>
-                        <td className="muted">{p.targetAudience ?? "—"}</td>
-                        <td>
-                          <StatusBadge status={p.status} />
-                        </td>
-                        <td>
-                          {p.status === "PUBLISHED" ? (
-                            <span className="ci-meta">已发布</span>
-                          ) : (
-                            <span className="ci-meta" title="发布需走：新品上架 → 运营计划 → 同意（线2 审核库存）">
-                              经运营计划发布
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setShowProductForm(false); setForm(EMPTY_FORM); }}
+                disabled={busy}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleAddProduct}
+                disabled={busy || !form.name || !form.category || !form.description}
+              >
+                {busy ? "保存中…" : "保存商品"}
+              </button>
+            </div>
           </div>
-        </>
+        </div>
       )}
     </section>
   );

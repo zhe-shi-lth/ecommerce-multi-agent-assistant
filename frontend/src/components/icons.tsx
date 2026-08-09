@@ -9,10 +9,8 @@ export type IconName =
   | "orders"
   | "dashboard"
   | "simulator"
-  | "favorites"
   | "settings"
   | "usermonitor"
-  | "test"
   | "logout"
   | "check"
   | "alert"
@@ -74,9 +72,6 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3" />
     </>
   ),
-  favorites: (
-    <path d="M12 20.3l-1.45-1.32C5.4 14.24 2 11.16 2 7.5 2 4.92 4.02 3 6.5 3c1.74 0 3.41.81 4.5 2.08C12.09 3.81 13.76 3 15.5 3 17.98 3 20 4.92 20 7.5c0 3.66-3.4 6.74-8.55 11.49L12 20.3z" />
-  ),
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />
@@ -89,12 +84,6 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
       <path d="M16 4.6a3 3 0 010 5.8" />
       <path d="M21 20c0-2.5-1.6-4.6-4-5.3" />
-    </>
-  ),
-  test: (
-    <>
-      <path d="M10 3h4M10.5 3v6l-5 9a1.5 1.5 0 001.3 2.2h11.4A1.5 1.5 0 0021 18l-5-9V3" />
-      <path d="M7.5 14h9" />
     </>
   ),
   logout: (
