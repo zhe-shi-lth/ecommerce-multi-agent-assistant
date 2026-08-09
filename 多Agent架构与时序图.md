@@ -45,7 +45,7 @@
 | Agent | 文件 | 类型 | 职责 | 所属线 |
 |---|---|---|---|---|
 | `InventoryMonitorAgent` | `inventory_monitor_agent.py` | 预测型 | 库存监控：真实日销 + 大促日历估"可售天数"，<5 天预警（销售监控页）；可选 LLM 判未来事件 | 线2 监控 |
-| `OrderMonitorAgent` | `order_monitor_agent.py` | 核验型 | 订单维度复核（当前为地址补全复核）：商家点"确认地址已补全"后，先向订单来源复核地址是否真已补全，再决定能否流转状态；非 LLM（演示随机 / 真实平台校验） | 线2 监控 |
+| `OrderMonitorAgent` | `order_monitor_agent.py` | 核验型 | 订单维度复核（当前为地址补全复核）：商家点"确认地址已补全"后，先向订单来源复核地址是否真已补全，再决定能否流转状态；非 LLM，经 `PlatformAdapter.get_address_complete` 复核，**模式无关**（模拟器 = 官方 API 替身，填凭证即查真实 API），与定时轮询共用同一接缝，不分成 real/模拟两套 | 线2 监控 |
 
 ### D. 两个"确定性内核"模块（不是 Agent，是被 Agent 调用的"脑"）
 - `forecast.py`（`compute_forecast`）→ 被 `InventoryPurchaseAgent` 用，纯统计算需求/补货量。
@@ -63,39 +63,38 @@
 - **图片卡片**（出图模型 `qwen-image`）——管"真实出图"，是**另一个独立模型**，跟文本 LLM 无关。
 - **视频卡片**（如万相 `wan2.7-t2v`）——管"真实出视频"，独立模型。
 - **监控卡片**（库存监控大模型）——管线2 库存智能预警；关闭/未配时按可售天数红线降级，不报错。
-- **订单监控（地址复核）卡片**——**非 LLM**：只有 `mode`（demo/real）+ 演示通过率，不调任何模型。
+- **订单监控（地址复核）卡片**——**非 LLM**：经 `PlatformAdapter.get_address_complete` 复核地址是否补全，**模式无关**（未配凭证→模拟真相；配了→真实平台 API，零代码改动）。手动「确认地址已补全」与定时轮询已合并到同一条接缝，不再有 `mode`/演示通过率配置。
 - **平台对接（订单数据源）卡片**——**非 LLM**：各平台 `app_key` / `app_secret` / `endpoint` / 店铺 ID / 授权令牌；`simulatePull` 开关决定 `DATA_SOURCE`（模拟造数 / 真实拉单）。**平台密钥只存在此处**，Java 不持有。
 
 | Agent | 用文本 LLM？ | 没文本 LLM 时 | 用图片模型？ |
 |---|---|---|---|
 | `SupervisorAgent` | 否（只编排） | 正常 | 否 |
-| `ProductPlanningAgent` | 是（写文案） | 降级为规则模板 | 否 |
-| `ImageCreativeAgent` | 是（写提示词/审核） | 降级为通用提示词 | **是**，真实出图独立于 LLM |
-| `InventoryPurchaseAgent` | 是（补原因说明） | 降级；**补货数字仍由确定性内核给** | 否 |
-| `OrderFulfillmentAgent` | 是（补履约建议） | 降级；**风险仍由确定性内核给** | 否 |
+| `ProductPlanningAgent` | 是（写文案） | 前端拦截并提示配置 Key，不生成假文案 | 否 |
+| `ImageCreativeAgent` | 是（写提示词/审核） | 前端拦截并提示配置 Key，不生成假图片/假提示词 | **是**，真实出图独立于 LLM |
+| `InventoryPurchaseAgent` | 是（补原因说明） | 可缺省说明；**补货数字仍由确定性内核给** | 否 |
+| `OrderFulfillmentAgent` | 是（补履约建议） | 可缺省说明；**风险仍由确定性内核给** | 否 |
 | `InventoryMonitorAgent` | 否（纯确定性，可选 LLM 判未来事件） | 正常（红线降级） | 否 |
-| `OrderMonitorAgent` | **否（非 LLM）** | 正常（演示随机 / 真实平台校验） | 否 |
+| `OrderMonitorAgent` | **否（非 LLM）** | 正常（模式无关：模拟器/真实平台走同一接缝） | 否 |
 
-要点：`InventoryPurchaseAgent` / `OrderFulfillmentAgent` 的**决策数字**来自 `forecast.py` / `logistics.py`，是**纯 Python 计算，根本不调任何模型**；`InventoryMonitorAgent` 也是纯确定性（可选 LLM 仅补"未来事件"判断）；`OrderMonitorAgent` 完全非 LLM。文本 LLM 只补"人话"。而 `ImageCreativeAgent` 的**真实出图只认图片卡片 Key**，与文本 LLM 无关。
+要点：`InventoryPurchaseAgent` / `OrderFulfillmentAgent` 的**决策数字**来自 `forecast.py` / `logistics.py`，是**纯 Python 计算，根本不调任何模型**；`InventoryMonitorAgent` 也是纯确定性（可选 LLM 仅补"未来事件"判断）；`OrderMonitorAgent` 完全非 LLM。生成型能力（文案、图片、视频）坚持真实结果：缺对应 Key 时前端直接提示配置，不返回假数据。而 `ImageCreativeAgent` 的**真实出图只认图片卡片 Key**，与文本 LLM 无关。
 
 ---
 
 ## 4. 如果没配置大模型，能做到什么程度？
 
 **A. 只没配文本 LLM，但图片 Key 配了**
-- 文案/标题/SEO → 规则模板（能出，但生硬，多平台文案退化成通用话术）
-- 图片 → **仍能真实出图**（用规则提示词当输入喂给 qwen-image）
+- 文案/标题/SEO → 前端拦截并提示配置文本 LLM Key，不生成假文案
+- 图片 → 若已有真实提示词/图片输入且图片 Key 已配，可真实出图；否则提示补齐所需模型配置
 - 库存 / 履约 / 监控 → **完全正常**（确定性，零模型依赖）
 
 **B. 啥模型都没配（只有 Java + Python 规则层）**
 - 库存补货建议、履约物流风险、库存监控预警 → **仍完全正常**（纯 `forecast.py` / `logistics.py` 计算，不需要任何 Key）
-- 文案 → 只剩模板占位
-- 图片 → 出不了（必须图片卡片 Key）
+- 文案 / 图片 / 视频 → 前端提示去设置中心配置对应 Key，不生成假内容
 - 上架编排、落库、发布闸门 → 正常
 
 **C. 全配齐（推荐）** → 智能文案 + 真实出图 + 全决策，闭环完整。
 
-> 一句话：这项目把"不能瞎编"的硬决策（补多少货、能不能发货、几天售罄）用确定性代码兜底，大模型只负责"写得更像人话 / 更有创意"这一层——断网或没配 Key，业务不崩，只是变朴素。
+> 一句话：这项目把"不能瞎编"的硬决策（补多少货、能不能发货、几天售罄）用确定性代码兜底；而文案、图片、视频这些生成型内容必须来自真实模型能力。缺 Key 就提示配置，不伪造结果。
 
 ---
 
@@ -194,6 +193,8 @@ sequenceDiagram
 
 ### 图4 · 线2 订单复核（OrderMonitorAgent，地址补全复核）
 
+> 地址复核统一经模式无关的 `PlatformAdapter.get_address_complete`（未配凭证→模拟真相，配了→真实平台 API，零代码改动）。手动「确认地址已补全」与定时轮询（`OrderAddressSyncScheduler`）共用同一条接缝，不再区分 `real`/`demo` 分支。**付款复核与之完全对称**：`get_paid` / `verify-payment` / `mark-paid` / `paymentCheck` 结构与地址复核一一对应，未付款与地址不全共用同一套闭环（含超时升级统一覆盖两类）。
+
 ```mermaid
 sequenceDiagram
     participant 运营前端
@@ -203,14 +204,11 @@ sequenceDiagram
     participant 平台(订单来源)
 
     运营前端->>Java后端: 订单详情点「确认地址已补全」POST /api/orders/{id}/complete-address
-    Java后端->>Python多Agent: POST /order-monitor/verify {platform, order_id, address_complete}
+    Java后端->>Python多Agent: POST /order-monitor/verify {platform, order_id}
     Python多Agent->>OrderMonitorAgent: verify(order)
-    alt demo（默认）
-        OrderMonitorAgent-->>Python多Agent: 随机通过/拦截（受设置中心演示通过率控制）
-    else real（生产态，待接入）
-        OrderMonitorAgent->>平台(订单来源): 读 address_complete（taobao.trade.fullinfo.get / order.orderDetail / 小红书）
-        平台(订单来源)-->>OrderMonitorAgent: 地址完整标记
-    end
+    OrderMonitorAgent->>平台(订单来源): get_address_complete（taobao.trade.fullinfo.get / order.orderDetail / 小红书）
+    Note over OrderMonitorAgent: 未配凭证→返回与平台同构的模拟真相（稳定哈希，约60%已补全）；配了→真实平台 API
+    平台(订单来源)-->>OrderMonitorAgent: 地址完整标记
     alt verified=true
         Python多Agent-->>Java后端: {verified:true}
         Java后端->>Java后端: addressComplete=true + 重算履约 + 流转订单主状态

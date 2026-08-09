@@ -80,13 +80,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "model": "",
         "api_key": "",
     },
-    # 订单监控（地址复核）：独立非 LLM 配置块。
-    # mode=demo 随机模拟平台同步复核（success_rate 为通过率）；mode=real 调平台地址完整标记（待接入）。
-    # 设置中心优先于环境变量（ORDER_MONITOR_MODE / ORDER_MONITOR_DEMO_SUCCESS_RATE），两者皆缺回退 demo。
-    "order_monitor": {
-        "mode": "demo",
-        "success_rate": 0.5,
-    },
     # 平台对接（订单来源开放 API）：独立非 LLM 配置块，按平台各一份。
     # 未启用 / 缺凭证 → 真实模式失败闭合并给出可读原因（不静默降级回模拟数据）。
     # 凭证只来自本卡片，不读 .env；Java 不持有任何平台密钥（真实拉单时由 Python 读此处凭证翻译协议）。
@@ -142,20 +135,9 @@ def _normalize(data: dict) -> dict:
                     block.get("model", ""),
                 )
 
-    # 订单监控（地址复核）：独立非 LLM 配置块，不进上面的模型目录校验循环。
-    order_block = data.get("order_monitor")
-    if not isinstance(order_block, dict):
-        data["order_monitor"] = {"mode": "demo", "success_rate": 0.5}
-    else:
-        mode = (order_block.get("mode") or "demo").strip().lower()
-        if mode not in ("demo", "real"):
-            mode = "demo"
-        try:
-            rate = float(order_block.get("success_rate", 0.5))
-        except (TypeError, ValueError):
-            rate = 0.5
-        rate = max(0.0, min(1.0, rate))
-        data["order_monitor"] = {"mode": mode, "success_rate": rate}
+    # 订单监控（地址复核）已改为模式无关：始终经 PlatformAdapter.get_address_complete 复核，
+    # 不再有 demo/real 配置块。若历史 settings.json 仍残留 order_monitor，直接丢弃，避免误导。
+    data.pop("order_monitor", None)
 
     # 平台对接：非 LLM 配置块，不进上面的模型目录校验循环。按已知平台整体重建，
     # 缺字段补默认、未知平台丢弃——同时修掉 _deep_merge 只合并两层导致的子块被整体覆盖问题。
@@ -310,14 +292,11 @@ def capabilities() -> dict[str, Any]:
             monitor_ok = False
             monitor_reason = "未填写监控大模型 API Key（请在设置中心监控卡片填写，否则红线预警）"
 
-    # 订单监控（地址复核）：非 LLM 配置块，始终可用；reason 说明当前模式。
-    om_block = s.get("order_monitor", {}) or {}
-    om_mode = (om_block.get("mode") or "demo").strip().lower()
+    # 订单监控（地址复核）：模式无关，始终可用；经 PlatformAdapter 复核地址是否完整
+    # （未配凭证用模拟器同构真相，配了查真实开放 API）。
     order_monitor_ok = True
     order_monitor_reason = (
-        "演示态（随机通过/拦截，演练用，生产前请切换为真实模式）"
-        if om_mode == "demo"
-        else "生产态（需在 OrderMonitorAgent._verify_real 经 PlatformAdapter 接入平台开放 API 读取 address_complete）"
+        "模式无关：未配置平台凭证时返回模拟器同构真相，配置后自动查真实开放 API（address_complete）"
     )
 
     # 平台对接：每平台单独判定「能否真实拉单/复核」，纯本地判定（不发网络请求）。

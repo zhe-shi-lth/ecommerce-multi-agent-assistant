@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getOrder, completeAddress } from "../api/orders";
+import { getOrder, completeAddress, markPaid, shipOrder, reviewOrder, recheckOrder } from "../api/orders";
 import { getProducts } from "../api/products";
 import type { Order, Product } from "../api/types";
-import { platformLabel, platformTone } from "../platforms";
+import { platformLabel } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import { Icon } from "../components/icons";
 
@@ -13,39 +13,31 @@ const STATUS_META: Record<string, { label: string; tone: "ok" | "warn" | "bad" |
   PENDING_ANALYSIS: { label: "待分析", tone: "warn" },
   NEEDS_REVIEW: { label: "需人工审核", tone: "bad" },
   INSUFFICIENT_STOCK: { label: "库存不足", tone: "bad" },
+  SHIPPED: { label: "已发货", tone: "ok" },
+  REJECTED: { label: "已驳回", tone: "bad" },
 };
 function statusMeta(s: string): { label: string; tone: "ok" | "warn" | "bad" | "neutral" } {
   return STATUS_META[s] ?? { label: s, tone: "neutral" };
 }
 
-function issuesOf(o: Order): string[] {
-  const list: string[] = [];
-  if (!o.paid) list.push("订单未付款");
-  if (!o.addressComplete) list.push("收货地址不完整");
-  if (o.status === "INSUFFICIENT_STOCK") list.push("库存不足，暂不可发货");
-  if (o.manualReviewRequired) list.push("需人工审核履约");
-  return list;
-}
+// 待处理原因 → 中文标签（仅 status=PENDING_ANALYSIS 有值）
+const PENDING_REASON_LABEL: Record<string, string> = {
+  UNPAID: "待付款",
+  ADDRESS_INCOMPLETE: "地址不全",
+  UNPAID_AND_ADDRESS: "未付款且地址不全",
+};
 
-// 收件人字段中缺失的项（用于「地址异常」卡片提示买家补哪几项）。
-function missingAddressFields(o: Order): string[] {
-  const miss: string[] = [];
-  if (!o.receiverName) miss.push("收件人姓名");
-  if (!o.receiverPhone) miss.push("联系电话");
-  if (!o.receiverProvince) miss.push("省份");
-  if (!o.receiverCity) miss.push("城市");
-  if (!o.receiverDistrict) miss.push("区/县");
-  if (!o.receiverDetail) miss.push("详细地址");
-  return miss;
-}
+// 地址超时升级天数（与后端 order.address-sync.sla-days 默认值保持一致，仅用于提示文案）
+const SLA_DAYS = 7;
 
-// 履约建议：由订单真实信号推导的下一步动作（后端 fulfillmentSuggestionStatus 当前冗余复制了 status，
-// 这里改为前端据 paid/address/manualReview/status 推导，避免与「订单状态」重复）。
+// 下一步建议：由订单真实信号推导的一句话动作指引
 function suggestionOf(o: Order): string {
-  if (!o.paid) return "建议先催付，付款完成后再发货";
-  if (!o.addressComplete) return "建议联系买家补全收货地址后再发货";
-  if (o.status === "INSUFFICIENT_STOCK") return "库存不足，建议先补货再履约";
-  if (o.manualReviewRequired) return "建议转人工审核，通过后再发货";
+  if (o.status === "SHIPPED") return "已发货，履约完成";
+  if (o.status === "REJECTED") return "审核已驳回，不履约（请于平台侧线下取消/退款）";
+  if (!o.paid) return "先催付，付款完成后再发货";
+  if (!o.addressComplete) return "联系买家补全收货地址后再发货";
+  if (o.status === "INSUFFICIENT_STOCK") return "库存不足，先补货再履约";
+  if (o.manualReviewRequired) return "转人工审核，通过后再发货";
   return "可直接履约发货";
 }
 
@@ -58,6 +50,13 @@ function money(v?: number | string | null): string {
   return isNaN(n) ? "—" : `¥${n.toFixed(2)}`;
 }
 
+const TONE_COLOR: Record<string, string> = {
+  ok: "#2fa86a",
+  warn: "#f5a623",
+  bad: "#e5484d",
+  neutral: "#c9ccd4",
+};
+
 export default function OrderDetail() {
   const { id } = useParams();
   const orderId = Number(id);
@@ -66,9 +65,8 @@ export default function OrderDetail() {
   const [products, setProducts] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [completing, setCompleting] = useState(false);
-  const [addrMsg, setAddrMsg] = useState<string | null>(null);
-  const [addrTone, setAddrTone] = useState<"ok" | "error" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ msg: string; tone: "ok" | "error" } | null>(null);
 
   useEffect(() => {
     Promise.all([getOrder(orderId), getProducts()])
@@ -84,33 +82,64 @@ export default function OrderDetail() {
     ? `【店铺】温馨提示：您在本店的订单 #${order.id} 收货地址尚不完整，可能影响发货与签收。麻烦您在订单页补全「收件人姓名、联系电话、省/市/区、详细地址」，补全后我们将尽快为您安排发货。如有疑问可联系客服。`
     : "";
 
-  const handleCopyScript = async () => {
-    try {
-      await navigator.clipboard.writeText(contactScript);
-      setAddrMsg("联系客户话术已复制到剪贴板");
-    } catch {
-      setAddrMsg("复制失败，请手动复制：" + contactScript);
-    }
+  const payScript = order
+    ? `【店铺】温馨提示：您在本店的订单 #${order.id} 尚未付款，我们已为您保留库存。麻烦您在订单页完成付款，付款后我们将尽快为您安排发货。如有疑问可联系客服。`
+    : "";
+
+  // 当前订单的关键状态（驱动横幅与操作区）
+  const addressIssue = !order?.addressComplete;
+  const unpaid = !order?.paid;
+  const escalatedAddress =
+    order?.status === "NEEDS_REVIEW" &&
+    (order?.pendingReason === "ADDRESS_INCOMPLETE" || order?.pendingReason === "UNPAID_AND_ADDRESS");
+  const readyToShip = order?.status === "READY_TO_SHIP";
+  const insufficientStock = order?.status === "INSUFFICIENT_STOCK";
+  const reviewNeeded = order?.status === "NEEDS_REVIEW";
+  // 仅当单据真正完整（已付款 ∧ 地址完整 ∧ 库存充足）才允许"通过审核"，否则按钮禁用并提示先处理前置项。
+  const canApprove =
+    !!order && order.paid && order.addressComplete && order.status !== "INSUFFICIENT_STOCK";
+
+  const withFeedback = (p: Promise<Order>, okMsg: (o: Order) => string) => {
+    if (!order) return;
+    setBusy(true);
+    setFeedback(null);
+    p.then((u) => {
+      setOrder(u);
+      setFeedback({ msg: okMsg(u), tone: "ok" });
+    })
+      .catch((e: Error) => setFeedback({ msg: e.message || "操作未成功，请重试", tone: "error" }))
+      .finally(() => setBusy(false));
   };
 
-  const handleConfirmAddress = () => {
-    if (!order) return;
-    setCompleting(true);
-    setAddrMsg(null);
-    setAddrTone(null);
-    completeAddress(order.id)
-      .then((updated) => {
-        setOrder(updated);
-        setAddrMsg(`平台已确认地址完整，订单状态已更新：${statusMeta(updated.status).label}`);
-        setAddrTone("ok");
-      })
-      .catch((e: Error) => {
-        // 后端复核未通过（演示态随机拦截）会返回 409 + 可读原因，直接透传给用户。
-        setAddrMsg(e.message || "地址补全确认未成功，请重试");
-        setAddrTone("error");
-      })
-      .finally(() => setCompleting(false));
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => setFeedback({ msg: `${label}已复制到剪贴板`, tone: "ok" }))
+      .catch(() => setFeedback({ msg: `复制失败，请手动复制：${text}`, tone: "error" }));
   };
+
+  const handleConfirmAddress = () =>
+    withFeedback(completeAddress(order!.id), (u) => `平台已确认地址完整，状态：${statusMeta(u.status).label}`);
+  const handleConfirmPaid = () =>
+    withFeedback(markPaid(order!.id), (u) => `平台已确认已付款，状态：${statusMeta(u.status).label}`);
+  const handleShip = () =>
+    withFeedback(shipOrder(order!.id), (u) => `已发货，状态：${statusMeta(u.status).label}`);
+  const handleReview = (decision: "APPROVE" | "REJECT") =>
+    withFeedback(
+      reviewOrder(order!.id, decision),
+      (u) =>
+        decision === "APPROVE"
+          ? `已通过审核，状态：${statusMeta(u.status).label}`
+          : "已驳回，订单不履约（请于平台侧线下取消/退款）"
+    );
+  const handleRecheck = () =>
+    withFeedback(
+      recheckOrder(order!.id),
+      (u) =>
+        u.status === "READY_TO_SHIP"
+          ? `库存已补足，状态翻回：${statusMeta(u.status).label}，可发货`
+          : `已重新判定，状态：${statusMeta(u.status).label}`
+    );
 
   if (loading)
     return (
@@ -123,11 +152,10 @@ export default function OrderDetail() {
   if (!order) return <div className="notice">未找到订单 {orderId}</div>;
 
   const meta = statusMeta(order.status);
-  const issues = issuesOf(order);
   const product = products.find((p) => p.id === order.productId);
   const productName = product ? product.name : `商品 #${order.productId}`;
   const encrypted = order.encrypted === true;
-
+  const accent = TONE_COLOR[meta.tone];
   const address = [order.receiverProvince, order.receiverCity, order.receiverDistrict, order.receiverDetail]
     .filter(Boolean)
     .join(" ");
@@ -138,12 +166,27 @@ export default function OrderDetail() {
       <div className="v">{v}</div>
     </div>
   );
+  const Chip = ({ children }: { children: ReactNode }) => (
+    <span
+      style={{
+        fontSize: 12,
+        padding: "3px 10px",
+        borderRadius: 999,
+        background: "#f4f4f7",
+        color: "#5b5f6b",
+        border: "1px solid #ececf0",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
 
   return (
     <section>
       <PageHeader
         title={`订单 #${order.id}`}
-        subtitle="商家视角 · 订单 API 返回字段（按平台对齐淘宝 / 抖音 / 小红书）"
+        subtitle="商家视角 · 订单履约处理"
         icon={<Icon name="orders" />}
         actions={
           <button className="btn btn-secondary" onClick={() => navigate("/orders")}>
@@ -152,55 +195,154 @@ export default function OrderDetail() {
         }
       />
 
-      <div className="meta">
-        <span>
-          状态: <span className={`badge badge-${meta.tone}`}>{meta.label}</span>
-        </span>
-        <span>
-          平台:{" "}
-          <span className={`badge badge-${platformTone(order.platform)}`}>
-            {platformLabel(order.platform)}
-          </span>
-        </span>
-        <span>人工审核: {order.manualReviewRequired ? "需审核" : "系统自动"}</span>
+      {/* 状态横幅：一眼看清当前状态 + 下一步动作 */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          padding: "16px 18px",
+          borderRadius: 12,
+          border: `1px solid ${accent}`,
+          background: `${accent}0f`,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span className={`badge badge-${meta.tone}`}>{meta.label}</span>
+          <span style={{ fontWeight: 600, color: "#2b2f38" }}>{suggestionOf(order)}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Chip>平台 · {platformLabel(order.platform)}</Chip>
+          <Chip>付款 · {order.paid ? "已付款" : "未付款"}</Chip>
+          <Chip>地址 · {order.addressComplete ? "完整" : "不完整"}</Chip>
+          {order.manualReviewRequired && <Chip>需人工审核</Chip>}
+          {order.pendingReason && PENDING_REASON_LABEL[order.pendingReason] && (
+            <Chip>原因 · {PENDING_REASON_LABEL[order.pendingReason]}</Chip>
+          )}
+        </div>
       </div>
 
       {encrypted && (
-        <div className="notice notice-info">
+        <div className="notice notice-info" style={{ marginBottom: 16 }}>
           该平台（{platformLabel(order.platform)}）对收件人信息做加密处理，下方姓名 / 电话 / 地址为平台返回的密文或隐私号。
         </div>
       )}
 
-      {!order.addressComplete && (
-        <div className="card" style={{ borderColor: "var(--bad, #e5484d)" }}>
-          <div className="card-header">
-            <h3 style={{ color: "var(--bad, #e5484d)" }}>地址异常</h3>
+      {/* 操作区：当前状态唯一的处理入口 */}
+      <div className="card">
+        <div className="card-header">
+          <h3>操作</h3>
+        </div>
+
+        {readyToShip && (
+          <div className="notice notice-ok" style={{ marginBottom: 12 }}>
+            付款与地址均已就绪，可安排发货。
           </div>
+        )}
+        {insufficientStock && (
           <div className="notice notice-error" style={{ marginBottom: 12 }}>
-            <strong>收货地址不完整，存在退回风险。</strong>
-            {encrypted
-              ? " 该平台对收件人加密，请通过平台后台联系买家补全地址后再确认。"
-              : missingAddressFields(order).length > 0
-                ? ` 缺失项：${missingAddressFields(order).join("、")}。`
-                : " 请核对收件人信息是否完整。"}
+            当前库存不足以履约该订单，请到「销售监控」补足库存；补足后点「我已补货，重新判定」翻回可发货。
           </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button className="btn btn-secondary" onClick={handleCopyScript} disabled={completing}>
-              <Icon name="copy" /> 复制联系客户话术
-            </button>
-            <button className="btn btn-primary" onClick={handleConfirmAddress} disabled={completing}>
-              {completing ? <span className="spinner" /> : <Icon name="check" />}
+        )}
+        {reviewNeeded && (
+          <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+            该订单需人工审核后决定是否履约。
+            {escalatedAddress && ` 已超过 ${SLA_DAYS} 天未补全地址，已升级为人工审核。`}
+          </div>
+        )}
+        {order.status === "SHIPPED" && (
+          <div className="notice notice-ok" style={{ marginBottom: 12 }}>
+            已发货，履约完成。物流：{order.logisticsCompany || "—"}，运单号：{order.waybillNo || "—"}
+            {order.shippedAt ? `，发货时间：${fmt(String(order.shippedAt))}` : ""}。
+          </div>
+        )}
+        {order.status === "REJECTED" && (
+          <div className="notice notice-error" style={{ marginBottom: 12 }}>
+            审核已驳回，订单不履约（请于平台侧线下取消/退款）。
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {addressIssue && (
+            <button className="btn btn-primary" onClick={handleConfirmAddress} disabled={busy}>
+              {busy ? <span className="spinner" /> : <Icon name="check" />}
               确认地址已补全
             </button>
-          </div>
-          {addrMsg && (
-            <div className={`notice ${addrTone === "error" ? "notice-error" : "notice-ok"}`} style={{ marginTop: 12 }}>
-              {addrMsg}
-            </div>
+          )}
+          {unpaid && (
+            <button className="btn btn-primary" onClick={handleConfirmPaid} disabled={busy}>
+              {busy ? <span className="spinner" /> : <Icon name="check" />}
+              确认已付款
+            </button>
+          )}
+          {readyToShip && (
+            <button className="btn btn-primary" onClick={handleShip} disabled={busy}>
+              {busy ? <span className="spinner" /> : <Icon name="check" />}
+              发货
+            </button>
+          )}
+          {insufficientStock && (
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={() => navigate(`/dashboard?focusProduct=${order!.productId}`)}
+                disabled={busy}
+              >
+                <Icon name="dashboard" /> 前往销售监控补货
+              </button>
+              <button className="btn btn-primary" onClick={handleRecheck} disabled={busy}>
+                {busy ? <span className="spinner" /> : <Icon name="check" />}
+                我已补货，重新判定
+              </button>
+            </>
+          )}
+          {reviewNeeded && (
+            <>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleReview("APPROVE")}
+                disabled={busy || !canApprove}
+                title={canApprove ? undefined : "单据尚未完整，请先完成上方高亮的处理项（付款 / 地址 / 库存）再审核通过"}
+              >
+                <Icon name="check" /> 通过审核
+              </button>
+              <button className="btn btn-secondary" onClick={() => handleReview("REJECT")} disabled={busy}>
+                <Icon name="close" /> 驳回
+              </button>
+            </>
+          )}
+          {addressIssue && !encrypted && (
+            <button className="btn btn-secondary btn-sm" onClick={() => handleCopy(contactScript, "联系客户话术")} disabled={busy}>
+              <Icon name="copy" /> 复制联系话术
+            </button>
+          )}
+          {unpaid && (
+            <button className="btn btn-secondary btn-sm" onClick={() => handleCopy(payScript, "催付话术")} disabled={busy}>
+              <Icon name="copy" /> 复制催付话术
+            </button>
+          )}
+          {escalatedAddress && (
+            <button className="btn btn-secondary btn-sm" onClick={() => handleCopy(contactScript, "联系客户话术")} disabled={busy}>
+              <Icon name="copy" /> 复制联系话术
+            </button>
           )}
         </div>
-      )}
 
+        {feedback && (
+          <div className={`notice ${feedback.tone === "error" ? "notice-error" : "notice-ok"}`} style={{ marginTop: 12 }}>
+            {feedback.msg}
+          </div>
+        )}
+
+        {reviewNeeded && !canApprove && (
+          <div className="notice notice-warn" style={{ marginTop: 12 }}>
+            单据尚未完整，无法直接审核通过。请先完成上方高亮的处理项（付款 / 地址补全 / 补货），再点击「通过审核」。
+          </div>
+        )}
+      </div>
+
+      {/* 参考信息：买家与收件人 */}
       <div className="card">
         <div className="card-header">
           <h3>买家与收件人</h3>
@@ -221,68 +363,24 @@ export default function OrderDetail() {
         </div>
       </div>
 
+      {/* 参考信息：金额 / 物流 / 基础信息 */}
       <div className="card">
         <div className="card-header">
           <h3>金额与物流</h3>
         </div>
         <div className="review-highlight" style={{ marginBottom: 0, border: "none", boxShadow: "none", padding: 0 }}>
           <div className="review-grid">
+            {item("商品", productName)}
+            {item("数量", order.quantity)}
             {item("实付金额", money(order.payment))}
             {item("邮费", money(order.postFee))}
             {item("物流公司", order.logisticsCompany || "尚未发货")}
             {item("运单号", order.waybillNo || "—")}
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <h3>订单信息</h3>
-        </div>
-        <div className="review-highlight" style={{ marginBottom: 0, border: "none", boxShadow: "none", padding: 0 }}>
-          <div className="review-grid">
-            {item("订单 ID", `#${order.id}`)}
-            {item("平台", platformLabel(order.platform))}
-            {item("商品", productName)}
-            {item("数量", order.quantity)}
-            {item("订单状态", <span className={`badge badge-${meta.tone}`}>{meta.label}</span>)}
-            {item(
-              "付款状态",
-              <span className={`badge badge-${order.paid ? "ok" : "neutral"}`}>
-                {order.paid ? "已付款" : "未付款"}
-              </span>
-            )}
-            {item(
-              "收货地址",
-              <span className={`badge badge-${order.addressComplete ? "ok" : "bad"}`}>
-                {order.addressComplete ? "完整" : "不完整"}
-              </span>
-            )}
-            {item(
-              "人工审核",
-              <span className={`badge badge-${order.manualReviewRequired ? "warn" : "neutral"}`}>
-                {order.manualReviewRequired ? "需审核" : "系统自动"}
-              </span>
-            )}
-            {item("履约建议", suggestionOf(order))}
+            {item("发货时间", order.shippedAt ? fmt(String(order.shippedAt)) : "—")}
             {item("创建时间", fmt(String(order.createdAt)))}
             {item("更新时间", fmt(String(order.updatedAt)))}
           </div>
         </div>
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <h3>待处理事项</h3>
-        </div>
-        {issues.length === 0 ? (
-          <div className="notice notice-ok">无待处理，可直接履约发货。</div>
-        ) : (
-          <div className="notice notice-warn">
-            <strong>需关注：</strong>
-            {issues.join(" · ")}
-          </div>
-        )}
       </div>
     </section>
   );

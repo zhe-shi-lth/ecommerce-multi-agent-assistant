@@ -308,27 +308,33 @@ docker compose up -d --build
 
 两者各管一摊，均属线2 监控，入口分别在 `line2.py` 的 `/line2/inventory-warnings` 与 `/order-monitor/verify`。
 
-### 演示态随机机制（⚠️ 生产须移除）
+### 定时轮询自动补全（模式无关）
 
-本机/演示默认 `ORDER_MONITOR_MODE=demo`，由 `OrderMonitorAgent` **随机模拟平台同步复核的通过/拦截**（通过率由 `ORDER_MONITOR_DEMO_SUCCESS_RATE` 控制，默认 `0.5`）。这样点一次可能成功（状态流转）、也可能失败（弹窗拦截），用于演练监控 Agent 的两条分支。
+除手动「确认地址已补全」外，系统还有**定时轮询**自动回写平台地址真相（`OrderAddressSyncScheduler`，默认每 60s 一轮），免去运营逐单手动点：
 
-> 真实平台往往只返回「地址是否完整」标记（而非明文详细地址，且常加密），本系统也只跟踪该布尔，不存明文地址。因此演示态用随机机制替代"平台同步"，无需人工录入虚拟地址。
+- 每轮取「待分析 + 地址未补全」的订单，逐单调 `POST /agent/ecommerce/order-monitor/address-status`（走 `PlatformAdapter.get_address_complete`）；平台确认已补全则复用 `OrderCompletionService.markAddressComplete` 流转状态。
+- **模式无关、接官方 API 即直接可用**：未配置真实凭证时，适配器返回与平台同构的**模拟真相**（约 60% 判定为已补全，结果稳定），因此「模拟器」与「官方 API」走完全相同的落库路径；在设置中心填好平台凭证后自动改查真实开放 API，轮询逻辑零改动。
+- 查询失败（Python 不可用 / 平台未对接）**失败闭合**：跳过该单、不改状态、记日志，不影响本轮其余订单。
+- 开关与节奏见配置 `ORDER_ADDRESS_SYNC_ENABLED` / `ORDER_ADDRESS_SYNC_DELAY_MS` / `ORDER_ADDRESS_SYNC_BATCH`。
 
-### 上生产：切换到真实复核
+### 手动「确认地址已补全」与定时轮询共用同一套逻辑
 
-1. 将 `ORDER_MONITOR_MODE` 置为 `real`。
-2. 在 `OrderMonitorAgent._verify_real` 中接入对应开放平台订单详情接口，读取收件人地址完整标记（`address_complete`）：
-   - 淘宝/天猫：`taobao.trade.fullinfo.get` / `taobao.orders.detail.get`
-   - 抖音电商（抖店）：`order.orderDetail`
-   - 小红书：订单详情接口
-3. 确认无误后删除演示态随机分支（保留 `real` 实现即可）。
+手动点「确认地址已补全」（`POST /api/orders/{id}/complete-address`）与上面的定时轮询，**最终都经 `PlatformAdapter.get_address_complete` 向订单来源复核地址是否真已补全**——这条接缝是**模式无关**的：
 
-配置项：**优先在设置中心「监控模型设置 → 订单监控（地址复核）」卡片配置**（`mode` 下拉 + 演示通过率滑条，保存即持久化）。以下环境变量仅为**兜底默认值**（设置中心未配置时生效）：
+- 未配置真实平台凭证（模拟器模式）→ 适配器返回与平台**同构**的模拟真相（`_simulated_address_complete`：稳定哈希、约 60% 判定已补全），充当官方 API 的替身；
+- 在设置中心填好平台凭证 → 自动改查真实开放 API（`_address_complete_real`），**代码零改动**。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `ORDER_MONITOR_MODE` | `demo` | `demo`=随机模拟；`real`=生产态，须实现平台校验 |
-| `ORDER_MONITOR_DEMO_SUCCESS_RATE` | `0.5` | 演示态随机通过率（仅 demo 生效） |
+这正是本项目「用模拟器模拟官方 API、接上官方 API 即直接用」的设计目标：**不把系统切成 real / 模拟两套分支**，而是让同一套落库路径在"模拟真相"与"真实平台"之间无缝切换。手动点「确认地址已补全」与定时轮询现在**已彻底合并到这一条模式无关接缝**（随机演练分支已移除，见文末「已知约束与下一步」）。
+
+### 付款闭环（与地址补全完全对称）
+
+「未付款」与「地址不全」共用同一套闭环逻辑，避免两类问题出现逻辑分裂：
+
+- **手动「确认已付款」**：`POST /api/orders/{id}/mark-paid` 先调 `OrderMonitorAgent.verify_payment`（`POST /agent/ecommerce/order-monitor/verify-payment`）向订单来源复核买家是否已付款；未通过→`409` + 可读原因（前端弹窗，不改状态），通过→置 `paid=true` 并复用 `OrderCompletionService.markPaid` 流转状态（人工审核优先保持 `NEEDS_REVIEW`；地址仍不全则保持 `PENDING_ANALYSIS`/`ADDRESS_INCOMPLETE`；否则重算履约）。
+- **定时轮询自动回款**（`OrderAddressSyncScheduler.paymentCheck`，与 `healCheck` 对称）：每轮取「待分析 + 未付款」订单，逐单调 `POST /agent/ecommerce/order-monitor/payment-status`（走 `PlatformAdapter.get_paid`）；平台确认已付款则自动 `markPaid`。同样**模式无关**：未配凭证→稳定模拟真相（约 60% 判定已付款），配了→真实开放 API。
+- **超时升级统一覆盖两类**：`escalateOverdue` 现查询「待分析 +（地址未补全 或 未付款）+ 超 `sla-days` 天」的订单统一升级为 `NEEDS_REVIEW`（保留 `pendingReason` 区分来源），纯未付款单不再卡死在待分析中。
+
+`pendingReason` 三态（`UNPAID` / `ADDRESS_INCOMPLETE` / `UNPAID_AND_ADDRESS`）由 `Order.computePendingReason` 在待分析态推导，前端据此路由「地址异常 / 待付款 / 两者都有」卡片与对应话术。地址与付款两套复核经 `get_address_complete` / `get_paid` 同一个模式无关接缝，逻辑完全对齐。
 
 ---
 
@@ -443,6 +449,9 @@ public interface OrderSource {
 | POST | `/agent/ecommerce/operation-plan` | 接收 product/inventory/order 上下文，返回结构化 `OperationPlanResult`，并副作用式写回 Java |
 | POST | `/agent/ecommerce/platform/pull-orders` | 按平台分组调 `PlatformAdapter` 拉真实订单，返回平台中立 `PlatformOrder` 列表（Java 落库，Python 不持库） |
 | GET | `/agent/ecommerce/platform/status` | 各平台对接就绪情况（`ready` 列表：凭证齐全、可正常拉单的平台） |
+| POST | `/agent/ecommerce/order-monitor/address-status` | 查询某平台订单地址完整标记（**模式无关**，供定时轮询复用）：已配置凭证→查官方 API，未配置→返回模拟真相 |
+| POST | `/agent/ecommerce/order-monitor/verify-payment` | 订单付款复核（对称 verify）：向订单来源确认买家是否已付款，未通过→`verified=false` + 可读原因 |
+| POST | `/agent/ecommerce/order-monitor/payment-status` | 查询某平台订单付款标记（**模式无关**，供定时轮询复用）：已配置凭证→查官方 API，未配置→返回模拟真相 |
 
 请求体（`OperationPlanRequest`）：`product` / `inventory` / `order` 三个上下文对象 + `trigger_type`。
 
@@ -510,6 +519,9 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 | `python.agent.read-timeout-ms` | `120000` | 读取超时（留足多 Agent 串行 LLM 生成时间） |
 | `JAVA_API_BASE_URL` | `http://localhost:8080` | Python 调 Java 地址（环境变量覆盖） |
 | `DATA_SOURCE` | `mock` | 订单数据来源：`mock`=本地造数（默认，演示用）；`real`=经 Python 调平台开放 API 拉真实订单（需先在设置中心填平台凭证） |
+| `ORDER_ADDRESS_SYNC_ENABLED` | `true` | 定时轮询自动补全地址开关（见上方「定时轮询自动补全」）；关则只靠手动「确认地址已补全」 |
+| `ORDER_ADDRESS_SYNC_DELAY_MS` | `60000` | 轮询间隔（毫秒），默认 60s 一轮 |
+| `ORDER_ADDRESS_SYNC_BATCH` | `50` | 每轮最多处理的「待分析 + 地址未补全」订单数 |
 | `LLM_ENABLED` | `true` | 是否启用真实 LLM（见上方「LLM 配置」） |
 | `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点（Ollama） |
 | `LLM_MODEL` | `qwen2.5:latest` | LLM 模型名 |
@@ -528,5 +540,6 @@ curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
 ## 已知约束与下一步
 
 - 各表 `status` 字段有 CHECK 枚举约束，写数据时需使用合法枚举值（见上文示例）。
-- 默认 Agent 为规则实现（显式选择「规则」或部署级 `LLM_ENABLED=false`）；在设置中心选好厂家并填 Key（或本地 Ollama 就绪）后，4 个业务 Agent 走真实 LLM 生成，调用失败直接报错（不再静默降级到规则）。2 个监控 Agent 中 `InventoryMonitorAgent` 可选 LLM、 `OrderMonitorAgent` 为非 LLM 核验（演示随机 / 真实平台校验）。
+- 默认 Agent 为规则实现（显式选择「规则」或部署级 `LLM_ENABLED=false`）；在设置中心选好厂家并填 Key（或本地 Ollama 就绪）后，4 个业务 Agent 走真实 LLM 生成，调用失败直接报错（不再静默降级到规则）。`InventoryMonitorAgent` 为可选 LLM 的预测；地址补全复核（线2）走 `PlatformAdapter.get_address_complete`，**模式无关**（模拟器 = 官方 API 替身，填凭证即查真实 API）。
+- **已完成**：`OrderMonitorAgent` 的随机演练分支（`ORDER_MONITOR_MODE=demo`）已移除，手动「确认地址已补全」与定时轮询**已合并到同一条模式无关接缝**（统一走 `PlatformAdapter.get_address_complete`，模拟器 = 官方 API 替身，填凭证即查真实 API）。设置中心不再暴露订单监控的模式/成功率配置。
 - **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、LangGraph 动态编排。

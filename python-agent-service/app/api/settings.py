@@ -27,7 +27,6 @@ class SettingsPatch(BaseModel):
     image: dict | None = Field(default=None)
     video: dict | None = Field(default=None)
     monitor: dict | None = Field(default=None)
-    order_monitor: dict | None = Field(default=None)
     platform_api: dict | None = Field(default=None)
     image_review_enabled: bool | None = Field(default=None)
     rag_enabled: bool | None = Field(default=None)
@@ -84,21 +83,6 @@ def _validate(patch: dict) -> dict:
     for key in ("image_review_enabled", "rag_enabled"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(status_code=400, detail=f"{key} 必须是布尔")
-
-    # 订单监控（地址复核）：独立非 LLM 配置块（mode + success_rate），不进上面的模型目录循环。
-    om = patch.get("order_monitor")
-    if isinstance(om, dict):
-        mode = (om.get("mode") or "demo").strip().lower()
-        if mode not in ("demo", "real"):
-            raise HTTPException(status_code=400, detail="order_monitor.mode 必须是 demo 或 real")
-        try:
-            rate = float(om.get("success_rate", 0.5))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="order_monitor.success_rate 必须是数字")
-        if not (0.0 <= rate <= 1.0):
-            raise HTTPException(status_code=400, detail="order_monitor.success_rate 必须在 0~1 之间")
-        om["mode"] = mode
-        om["success_rate"] = rate
 
     # 平台对接：非 LLM 配置块（每平台 enabled + 凭证），不进上面的模型目录循环。
     pa = patch.get("platform_api")

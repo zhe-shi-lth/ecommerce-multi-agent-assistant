@@ -15,6 +15,7 @@ public record OrderResponse(
         Boolean paid,
         Boolean manualReviewRequired,
         String fulfillmentSuggestionStatus,
+        String pendingReason,
         Map<String, Object> fulfillmentPlanJson,
         String receiverName,
         String receiverPhone,
@@ -28,6 +29,7 @@ public record OrderResponse(
         String logisticsCompany,
         String waybillNo,
         Boolean encrypted,
+        Instant shippedAt,
         Instant createdAt,
         Instant updatedAt) {
 }

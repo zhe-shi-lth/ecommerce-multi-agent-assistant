@@ -28,6 +28,16 @@ springdoc:
 platform:
   data-source: ${DATA_SOURCE:mock}
 
+# 地址补全定时轮询（模式无关，走 PlatformAdapter：模拟器即官方 API 替身）。
+# 自动回写平台 address_complete 真相，免去运营逐单手动点「确认地址已补全」。
+order:
+  address-sync:
+    enabled: ${ORDER_ADDRESS_SYNC_ENABLED:true}
+    fixed-delay-ms: ${ORDER_ADDRESS_SYNC_DELAY_MS:60000}
+    batch-size: ${ORDER_ADDRESS_SYNC_BATCH:50}
+    # 地址未补全订单超过该天数仍未处理 → 自动升级为「需人工审核」（模拟器下也生效，便于演练）。
+    sla-days: ${ORDER_ADDRESS_SYNC_SLA_DAYS:7}
+
 python:
   agent:
     base-url: ${PYTHON_AGENT_BASE_URL:http://localhost:8000}

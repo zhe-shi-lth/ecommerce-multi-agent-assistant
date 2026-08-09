@@ -1,0 +1,338 @@
+package com.lth.ecommerceagent.order;
+
+import java.util.List;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import com.lth.ecommerceagent.inventory.Inventory;
+import com.lth.ecommerceagent.inventory.InventoryRepository;
+import com.lth.ecommerceagent.python.PythonAgentClient;
+import com.lth.ecommerceagent.python.PythonFulfillmentResult;
+import com.lth.ecommerceagent.python.PythonOrderFulfillmentRequest;
+
+/**
+ * 地址补全的落库与履约状态推导（单一真相源）。
+ *
+ * <p>手动「确认地址已补全」与定时轮询（自动回写平台真相）都走这里：置 addressComplete=true
+ * → 调 Python 履约 Agent 重算 → 把结论收敛为合法枚举并同时写 orders.status 与
+ * fulfillment_suggestion_status（canShip→READY_TO_SHIP；仍缺库存→INSUFFICIENT_STOCK；其余→NEEDS_REVIEW）。
+ */
+@Service
+public class OrderCompletionService {
+
+    private final OrderRepository orderRepository;
+    private final InventoryRepository inventoryRepository;
+    private final PythonAgentClient pythonAgentClient;
+
+    public OrderCompletionService(
+            OrderRepository orderRepository,
+            InventoryRepository inventoryRepository,
+            PythonAgentClient pythonAgentClient) {
+        this.orderRepository = orderRepository;
+        this.inventoryRepository = inventoryRepository;
+        this.pythonAgentClient = pythonAgentClient;
+    }
+
+    @Transactional
+    public Order markAddressComplete(Order order) {
+        order.setAddressComplete(true);
+        resolveFulfillment(order);
+        return orderRepository.save(order);
+    }
+
+    /**
+     * 标记已付款并流转状态（对称 markAddressComplete），单一真相源。
+     *
+     * <p>手动「确认已付款」与定时轮询（自动回写平台付款真相）都走这里：置 paid=true
+     * → 按「事实」重新判定 → 把结论收敛为合法枚举并同时写 orders.status 与
+     * fulfillment_suggestion_status（canShip→READY_TO_SHIP；仍缺库存→INSUFFICIENT_STOCK；其余→NEEDS_REVIEW）。
+     */
+    @Transactional
+    public Order markPaid(Order order) {
+        order.setPaid(true);
+        resolveFulfillment(order);
+        return orderRepository.save(order);
+    }
+
+    /**
+     * 库存补足后的「重新判定」（单订单）：商家在订单详情点「我已补货，重新判定」触发。
+     * <b>不走 Python 履约 Agent</b>——补货后结论可由「事实 + 库存」直接判定，既能秒回也避免逐个订单发起慢调用卡死前端。
+     * 库存仍不足（{@code currentStock < quantity}）直接 409 拒绝并提示缺口，不做静默翻转；
+     * 库存充足且付款/地址齐全则翻回 READY_TO_SHIP；否则回到待分析/审核。
+     */
+    @Transactional
+    public Order recheckStock(Order order) {
+        Inventory inventory = inventoryRepository.findByProductId(order.getProduct().getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + order.getProduct().getId()));
+        if (inventory.getCurrentStock() < order.getQuantity()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "库存仍不足（当前 " + inventory.getCurrentStock() + " < 订单 " + order.getQuantity()
+                            + "），请先补足库存再重新判定");
+        }
+        // 补货后「重新判定」= 真去库存拿货：订单翻成可发货的同时把对应货量从库存扣掉，账目才闭环。
+        // 仅当本单确能履约（付款/地址齐全且无人工审核，落为 READY_TO_SHIP）才扣减；
+        // 其余回落态（待分析/审核）并不占用库存，绝不静默扣减。
+        resolveRecheck(order, true);
+        if ("READY_TO_SHIP".equals(order.getStatus())) {
+            int newStock = Math.max(0, inventory.getCurrentStock() - order.getQuantity());
+            inventory.setCurrentStock(newStock);
+            inventory.setInventoryStatus(recomputeStatus(newStock, inventory.getSafeStockThreshold()));
+            inventoryRepository.save(inventory);
+        }
+        return orderRepository.save(order);
+    }
+
+    /**
+     * 批量「重新判定」所有库存不足订单（订单 tab「缺货订单状态刷新」按钮）：<b>补货完成后</b>，按当前库存重算这些订单的状态。
+     * 翻成可发货的订单会<b>真实从库存拿货</b>（扣减对应货量并重算库存水位），与单订单刷新同一套账目逻辑；补货本身仍由既有补货闭环负责。
+     * 按商品分组、组内按下单时间从早到晚分配可用库存：越早的优先占用，能凑齐翻回 READY_TO_SHIP，凑不齐的保持挂起
+     * （及未付款/地址不全/需审核的回落对应态）。全程不调 Python，快且不卡前端；统计三类结果供前端提示。
+     */
+    @Transactional
+    public RecheckAllResult recheckAllInsufficient() {
+        List<Order> orders = orderRepository.findByStatus("INSUFFICIENT_STOCK");
+        RecheckAllResult result = new RecheckAllResult(orders.size(), 0, 0, 0);
+        java.util.Map<Long, List<Order>> byProduct = new java.util.LinkedHashMap<>();
+        for (Order o : orders) {
+            byProduct.computeIfAbsent(o.getProduct().getId(), k -> new java.util.ArrayList<>()).add(o);
+        }
+        for (java.util.Map.Entry<Long, List<Order>> e : byProduct.entrySet()) {
+            rejudgeGroup(e.getKey(), e.getValue(), result);
+        }
+        return result;
+    }
+
+    /**
+     * 单商品「重新判定」（销售监控「对应位置」按钮）：补货完成后，重算该商品库存不足订单的状态；翻成可发货的订单真实扣减库存。
+     */
+    @Transactional
+    public RecheckAllResult recheckProduct(Long productId) {
+        List<Order> group = orderRepository.findByStatusAndProductId("INSUFFICIENT_STOCK", productId);
+        RecheckAllResult result = new RecheckAllResult(group.size(), 0, 0, 0);
+        rejudgeGroup(productId, group, result);
+        return result;
+    }
+
+    /**
+     * 组内按下单时间升序，越早的订单优先占用可用库存；能凑齐→READY_TO_SHIP（占用并扣减库存），否则保持/回落，统计写入 result。
+     * 与单订单「重新判定」一致：翻成可发货的订单真实从 inventory.current_stock 拿货，循环结束后把剩余库存与水位状态落库。
+     */
+    private void rejudgeGroup(Long productId, List<Order> group, RecheckAllResult result) {
+        Inventory inventory = inventoryRepository.findByProductId(productId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + productId));
+        int avail = inventory.getCurrentStock();
+        group.sort((a, b) -> {
+            int c = a.getCreatedAt().compareTo(b.getCreatedAt());
+            return c != 0 ? c : Long.compare(a.getId(), b.getId());
+        });
+        for (Order o : group) {
+            // 仅当「无人工审核 ∧ 已付款 ∧ 地址完整 ∧ 库存够」才可履约并占用库存；否则不占用（回落对应态）。
+            boolean canFulfill = Boolean.FALSE.equals(o.getManualReviewRequired())
+                    && Boolean.TRUE.equals(o.getPaid())
+                    && Boolean.TRUE.equals(o.getAddressComplete())
+                    && avail >= o.getQuantity();
+            if (canFulfill) {
+                avail -= o.getQuantity();
+            }
+            resolveRecheck(o, canFulfill);
+            String after = o.getStatus();
+            if ("READY_TO_SHIP".equals(after)) {
+                result.incrementReady();
+            } else if ("INSUFFICIENT_STOCK".equals(after)) {
+                result.incrementStillShort();
+            } else {
+                result.incrementOther();
+            }
+            orderRepository.save(o);
+        }
+        // 库存联动：本次刷新实际占用的货（仅翻成 READY_TO_SHIP 的订单）从库存扣减，并据水位重算库存状态。
+        int newStock = Math.max(0, avail);
+        inventory.setCurrentStock(newStock);
+        inventory.setInventoryStatus(recomputeStatus(newStock, inventory.getSafeStockThreshold()));
+        inventoryRepository.save(inventory);
+    }
+
+    /** 据当前库存与警戒水位重算库存状态（RISK/LOW/ENOUGH），与 SimulationService 同口径，避免规则分叉。 */
+    private String recomputeStatus(int currentStock, int safeThreshold) {
+        if (currentStock < safeThreshold) {
+            return "RISK";
+        }
+        if (currentStock < safeThreshold * 2) {
+            return "LOW";
+        }
+        return "ENOUGH";
+    }
+
+    /**
+     * 重判定的确定性结论（不调 Python）：人工审核优先 → 未付款/地址不全 → 库存是否可履约。
+     * stockOk=true 且付款/地址齐全且无人工审核 → READY_TO_SHIP；stockOk=false 且付款/地址齐全 → 保持 INSUFFICIENT_STOCK；
+     * 其余回落 NEEDS_REVIEW / PENDING_ANALYSIS。
+     */
+    private void resolveRecheck(Order order, boolean stockOk) {
+        if (Boolean.TRUE.equals(order.getManualReviewRequired())) {
+            order.setPendingReason(null);
+            order.setStatus("NEEDS_REVIEW");
+            order.setFulfillmentSuggestionStatus("NEEDS_REVIEW");
+            return;
+        }
+        if (Boolean.FALSE.equals(order.getPaid())) {
+            order.setPendingReason(Order.computePendingReason(false, order.getAddressComplete(), "PENDING_ANALYSIS"));
+            order.setStatus("PENDING_ANALYSIS");
+            order.setFulfillmentSuggestionStatus("PENDING_ANALYSIS");
+            return;
+        }
+        if (Boolean.FALSE.equals(order.getAddressComplete())) {
+            order.setPendingReason(Order.computePendingReason(order.getPaid(), false, "PENDING_ANALYSIS"));
+            order.setStatus("PENDING_ANALYSIS");
+            order.setFulfillmentSuggestionStatus("PENDING_ANALYSIS");
+            return;
+        }
+        // 已付款 + 地址完整：看库存是否可履约。
+        order.setPendingReason(null);
+        if (stockOk) {
+            order.setStatus("READY_TO_SHIP");
+            order.setFulfillmentSuggestionStatus("READY_TO_SHIP");
+        } else {
+            order.setStatus("INSUFFICIENT_STOCK");
+            order.setFulfillmentSuggestionStatus("INSUFFICIENT_STOCK");
+        }
+    }
+
+    /**
+     * 按订单「事实」统一重算履约状态（人工审核优先 → 未付款/地址不全 → 履约 Agent 计算）。
+     * 调用前需先把已发生的事实（addressComplete / paid / manualReviewRequired）写到 order 上，
+     * markAddressComplete / markPaid / recheckStock 都复用此单一真相源，避免规则分叉。
+     */
+    private void resolveFulfillment(Order order) {
+        if (Boolean.TRUE.equals(order.getManualReviewRequired())) {
+            order.setPendingReason(null);
+            order.setStatus("NEEDS_REVIEW");
+            order.setFulfillmentSuggestionStatus("NEEDS_REVIEW");
+            return;
+        }
+        if (Boolean.FALSE.equals(order.getPaid())) {
+            order.setPendingReason(Order.computePendingReason(false, order.getAddressComplete(), "PENDING_ANALYSIS"));
+            order.setStatus("PENDING_ANALYSIS");
+            order.setFulfillmentSuggestionStatus("PENDING_ANALYSIS");
+            return;
+        }
+        if (Boolean.FALSE.equals(order.getAddressComplete())) {
+            order.setPendingReason(Order.computePendingReason(order.getPaid(), false, "PENDING_ANALYSIS"));
+            order.setStatus("PENDING_ANALYSIS");
+            order.setFulfillmentSuggestionStatus("PENDING_ANALYSIS");
+            return;
+        }
+
+        // 已付款 + 地址完整 → 调履约 Agent 重算能否发货。
+        order.setPendingReason(null);
+
+        Inventory inventory = inventoryRepository.findByProductId(order.getProduct().getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + order.getProduct().getId()));
+
+        PythonOrderFulfillmentRequest request = PythonOrderFulfillmentRequest.from(order, inventory);
+        PythonFulfillmentResult result = pythonAgentClient.callOrderFulfillment(request);
+
+        // Python 的 next_order_status 可能由 LLM 生成，不保证落在 orders 表的 CHECK 枚举内；
+        // 这里收敛为合法枚举后再落库，避免违反 ck_orders_* 的 CHECK 约束。
+        String resolved = toSuggestionStatus(result, order);
+        order.setFulfillmentSuggestionStatus(resolved);
+        order.setStatus(resolved);
+        order.setFulfillmentPlanJson(result.toJsonMap());
+    }
+
+    private String toSuggestionStatus(PythonFulfillmentResult result, Order order) {
+        if (Boolean.TRUE.equals(result.canShip())) {
+            return "READY_TO_SHIP";
+        }
+        // 仍缺库存时保留库存不足态，其余统一转人工审核。
+        if ("INSUFFICIENT_STOCK".equals(order.getStatus())) {
+            return "INSUFFICIENT_STOCK";
+        }
+        return "NEEDS_REVIEW";
+    }
+
+    /**
+     * 发货闭环的终态：仅「可发货(READY_TO_SHIP)」可发货。置 status / fulfillment_suggestion_status
+     * 为 SHIPPED，记录发货时间；物流公司与运单号缺失时由本方法模拟生成（与 MockOrderSource 同构），
+     * 接上真实平台后由平台返回物流信息，此处无需改动。
+     */
+    @Transactional
+    public Order ship(Order order) {
+        order.setStatus("SHIPPED");
+        order.setFulfillmentSuggestionStatus("SHIPPED");
+        order.setPendingReason(null);
+        order.setShippedAt(java.time.Instant.now());
+        if (order.getLogisticsCompany() == null || order.getLogisticsCompany().isBlank()) {
+            order.setLogisticsCompany(pickLogistics());
+        }
+        if (order.getWaybillNo() == null || order.getWaybillNo().isBlank()) {
+            order.setWaybillNo(nextWaybill());
+        }
+        return orderRepository.save(order);
+    }
+
+    /**
+     * 人工审核决议（单一真相源）：
+     * - APPROVE：先校验单据完整性（已付款 ∧ 地址完整 ∧ 库存充足），任一不满足直接 409 拒绝并给出原因，
+     *   强制运营先处理前置项，避免"点了就通过"；全部满足才清除 manualReviewRequired 并放行履约（READY_TO_SHIP）。
+     * - REJECT：置 REJECTED（终态，不履约），由商家在平台侧线下取消/退款；
+     *   本系统不删单、不自动取消，避免越权替平台决策。
+     */
+    @Transactional
+    public Order review(Order order, boolean approve) {
+        if (!approve) {
+            order.setManualReviewRequired(false);
+            order.setPendingReason(null);
+            order.setStatus("REJECTED");
+            order.setFulfillmentSuggestionStatus("REJECTED");
+            return orderRepository.save(order);
+        }
+
+        // 审核通过前必须先校验单据完整性：未付款 / 地址不全 / 库存不足 都不得被"放行"。
+        // 不静默回退到待分析，而是直接拒绝并给出可读原因，强制运营先处理完前置项再审核。
+        if (Boolean.FALSE.equals(order.getPaid())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "订单尚未付款，请先在「待付款」中确认已付款，再审核通过");
+        }
+        if (Boolean.FALSE.equals(order.getAddressComplete())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "收货地址不完整，请先确认地址已补全，再审核通过");
+        }
+        Inventory inventory = inventoryRepository.findByProductId(order.getProduct().getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + order.getProduct().getId()));
+        if (inventory.getCurrentStock() < order.getQuantity()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "库存不足（当前 " + inventory.getCurrentStock() + " < 订单 " + order.getQuantity()
+                            + "），请先生成补货计划补足库存，再审核通过");
+        }
+
+        // 单据已完整：清除人工审核标记，放行履约（仍回写履约结论快照保持一致）。
+        order.setManualReviewRequired(false);
+        order.setPendingReason(null);
+        PythonOrderFulfillmentRequest request = PythonOrderFulfillmentRequest.from(order, inventory);
+        PythonFulfillmentResult result = pythonAgentClient.callOrderFulfillment(request);
+        order.setFulfillmentSuggestionStatus("READY_TO_SHIP");
+        order.setStatus("READY_TO_SHIP");
+        order.setFulfillmentPlanJson(result.toJsonMap());
+        return orderRepository.save(order);
+    }
+
+    private static final String[] LOGISTICS = {"顺丰速运", "中通快递", "圆通速递", "韵达快递", "京东物流"};
+
+    private String pickLogistics() {
+        return LOGISTICS[new java.util.Random().nextInt(LOGISTICS.length)];
+    }
+
+    private String nextWaybill() {
+        return String.valueOf(10000000000000L + Math.abs(new java.util.Random().nextLong()) % 90000000000000L);
+    }
+}

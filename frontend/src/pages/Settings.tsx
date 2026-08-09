@@ -31,7 +31,6 @@ interface Settings {
   image: CardSettings & { enabled: boolean; edit_model: string; ref_strength: number };
   video: CardSettings & { enabled: boolean };
   monitor: CardSettings & { enabled: boolean };
-  order_monitor: { mode: string; success_rate: number };
   platform_api: Record<string, PlatformApiSettings>;
   image_review_enabled: boolean;
   rag_enabled: boolean;
@@ -69,7 +68,6 @@ function normalize(raw: Json): Settings {
   const image = pick("image");
   const video = pick("video");
   const monitor = pick("monitor");
-  const orderMonitor = pick("order_monitor");
   const platformApi = pick("platform_api");
   const str = (v: Json, d = "") => (typeof v === "string" ? v : d);
   const bool = (v: Json, d = true) => (typeof v === "boolean" ? v : d);
@@ -105,10 +103,6 @@ function normalize(raw: Json): Settings {
       base_url: str(monitor.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
       model: str(monitor.model, "qwen3.7-plus"),
       api_key: str(monitor.api_key),
-    },
-    order_monitor: {
-      mode: str(orderMonitor.mode, "demo") || "demo",
-      success_rate: num(orderMonitor.success_rate, 0.5),
     },
     // 平台维度以前端 PLATFORMS 为准（与后端 PLATFORM_KEYS 一致），后端缺块时补空表单。
     platform_api: Object.fromEntries(
@@ -307,45 +301,14 @@ export default function Settings() {
     );
   }
 
-  // 订单监控（地址复核）独立卡片：非 LLM 配置（mode 下拉 + 演示通过率滑条）。
+  // 订单监控（地址复核）独立卡片：已改为模式无关，无需配置（不再有 mode / 通过率）。
   function renderOrderMonitorCard() {
-    if (!settings) return null;
-    const om = settings.order_monitor;
     return (
-      <>
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span>复核模式</span>
-          <select value={om.mode} onChange={(e) => update("order_monitor", { mode: e.target.value })}>
-            <option value="demo">演示态（随机通过/拦截，演练用）</option>
-            <option value="real">生产态（调平台地址完整标记）</option>
-          </select>
-        </div>
-
-        {om.mode === "demo" && (
-          <div className="field" style={{ marginBottom: 12 }}>
-            <span>
-              演示通过率：{(om.success_rate * 100).toFixed(0)}%
-              <br />
-              <small className="muted">
-                随机通过概率，用于演练「通过/拦截」两个分支；不代表真实平台结果。生产环境请切换为真实模式。
-              </small>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={om.success_rate}
-              onChange={(e) => update("order_monitor", { success_rate: Number(e.target.value) })}
-            />
-          </div>
-        )}
-
-        <p className="muted" style={{ marginTop: 8 }}>
-          商家在订单详情点「确认地址已补全」时，本 Agent 先向订单来源复核地址是否真已补全，再决定能否流转状态，避免盲目信任人工操作。
-          生产态需在后端接入平台开放 API（读取 address_complete）后方可将模式置为 real。
-        </p>
-      </>
+      <p className="muted" style={{ marginTop: 8 }}>
+        地址复核已统一为<strong>模式无关</strong>：商家在订单详情点「确认地址已补全」时，系统经平台适配器复核地址是否真已补全——
+        未配置平台凭证时返回与真实平台同构的模拟真相（稳定、可复现），配置凭证后自动改查真实开放 API（address_complete），
+        <strong>无需切换模式、零代码改动</strong>。与定时轮询共用同一套逻辑，避免盲目信任人工操作。
+      </p>
     );
   }
 

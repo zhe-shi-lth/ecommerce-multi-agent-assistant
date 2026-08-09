@@ -84,6 +84,8 @@ export interface Order {
   paid: boolean;
   manualReviewRequired: boolean;
   fulfillmentSuggestionStatus: string;
+  // 待处理原因（仅 status=PENDING_ANALYSIS 有意义）：UNPAID / ADDRESS_INCOMPLETE / UNPAID_AND_ADDRESS
+  pendingReason?: string | null;
   fulfillmentPlanJson?: Record<string, Json> | null;
   receiverName?: string | null;
   receiverPhone?: string | null;
@@ -97,6 +99,7 @@ export interface Order {
   logisticsCompany?: string | null;
   waybillNo?: string | null;
   encrypted?: boolean | null;
+  shippedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -123,4 +126,22 @@ export interface InventoryWarning {
   sellableDays: number | null;
   level: string;
   warnings: string[];
+}
+
+// 库存不足订单按商品汇总（销售监控页「库存不足订单」警告板块）
+export interface InsufficientStockSummary {
+  productId: number;
+  productName: string;
+  backlogQuantity: number; // 积压销量合计（INSUFFICIENT_STOCK 订单）
+  orderCount: number; // 积压订单笔数
+  currentStock: number; // 该商品当前库存
+  shortQuantity: number; // 缺口 = max(0, backlogQuantity − currentStock)
+}
+
+// 批量「重新判定」库存不足订单的统计结果（订单 tab 按钮回执）
+export interface RecheckAllResult {
+  total: number; // 参与判定的 INSUFFICIENT_STOCK 订单数
+  readyToShip: number; // 库存充足已翻回可发货的笔数
+  stillInsufficient: number; // 库存仍不足、保持原状的笔数
+  other: number; // 因未付款/地址不全翻回其他态的笔数
 }

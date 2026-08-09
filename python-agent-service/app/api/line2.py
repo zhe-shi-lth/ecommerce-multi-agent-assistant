@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from app.agents.inventory_monitor_agent import InventoryMonitorAgent
 from app.agents.inventory_purchase_agent import InventoryPurchaseAgent
 from app.agents.order_monitor_agent import OrderMonitorAgent
+from app.errors import ConfigError
+from app.platform import get_adapter
 from app.schemas.inventory import InventoryContext
 from app.tools.java_api_client import JavaApiClient, logger
 
@@ -29,15 +31,84 @@ class OrderVerifyResponse(BaseModel):
     reason: str
 
 
+class AddressStatusRequest(BaseModel):
+    platform: str
+    platform_order_id: str
+
+
+class AddressStatusResponse(BaseModel):
+    complete: bool
+    reason: str
+
+
+class PaymentStatusRequest(BaseModel):
+    platform: str
+    platform_order_id: str
+
+
+class PaymentStatusResponse(BaseModel):
+    paid: bool
+    reason: str
+
+
 @router.post("/order-monitor/verify", response_model=OrderVerifyResponse)
 def verify_order(request: OrderVerifyRequest) -> OrderVerifyResponse:
     """订单维度复核（OrderMonitorAgent）：确认收货地址是否真已补全。
 
-    Java 在「确认地址已补全」时调用，由本 Agent 向订单来源（平台）核验；
-    未通过则 Java 直接拦截（409），不流转状态。演示态为随机通过/拦截。
+    Java 在「确认地址已补全」时调用，由本 Agent 经 PlatformAdapter 向订单来源（平台）核验；
+    未通过则 Java 直接拦截（409），不流转状态。复核**模式无关**：已配凭证查真实开放 API，
+    未配（模拟器）返回同构模拟真相，与定时轮询共用同一接缝。
     """
     result = OrderMonitorAgent().verify(request.order)
     return OrderVerifyResponse(verified=result.verified, reason=result.reason)
+
+
+@router.post("/order-monitor/address-status", response_model=AddressStatusResponse)
+def address_status(request: AddressStatusRequest) -> AddressStatusResponse:
+    """查询某平台订单的地址完整标记（**模式无关**，供 Java 定时轮询复用）。
+
+    直接走 `PlatformAdapter.get_address_complete`：已配置真实凭证 → 调官方 API；
+    未配置（模拟器模式）→ 返回同构的模拟真相。Java 定时器据此自动回写 `addressComplete`，
+    使「模拟器」与「官方 API」走完全相同的落库路径——接上官方 API 即直接可用，无需改轮询代码。
+    """
+    try:
+        check = get_adapter(request.platform).get_address_complete(request.platform_order_id)
+        return AddressStatusResponse(complete=check.complete, reason=check.reason)
+    except ConfigError as e:
+        # 失败闭合：查不到就当未补全，绝不静默放行（Java 侧不改状态）。
+        return AddressStatusResponse(complete=False, reason=f"向平台复核收货地址失败：{e}")
+    except Exception as e:  # noqa: BLE001
+        return AddressStatusResponse(complete=False, reason=f"向平台复核收货地址异常：{e}")
+
+
+@router.post("/order-monitor/verify-payment", response_model=OrderVerifyResponse)
+def verify_payment(request: OrderVerifyRequest) -> OrderVerifyResponse:
+    """订单付款复核（OrderMonitorAgent）：确认买家是否已付款（对称 verify）。
+
+    Java 在「确认已付款」时调用，由本 Agent 经 PlatformAdapter 向订单来源（平台）核验；
+    未通过则 Java 直接拦截（409），不流转状态。复核**模式无关**：已配凭证查真实开放 API，
+    未配（模拟器）返回同构模拟真相，与定时轮询共用同一接缝。
+    """
+    result = OrderMonitorAgent().verify_payment(request.order)
+    return OrderVerifyResponse(verified=result.verified, reason=result.reason)
+
+
+@router.post("/order-monitor/payment-status", response_model=PaymentStatusResponse)
+def payment_status(request: PaymentStatusRequest) -> PaymentStatusResponse:
+    """查询某平台订单的付款标记（**模式无关**，供 Java 定时轮询复用，对称 address-status）。
+
+    直接走 `PlatformAdapter.get_paid`：已配置真实凭证 → 调官方 API；
+    未配置（模拟器模式）→ 返回同构的模拟真相。Java 定时器据此自动回写 `paid`，
+    使「模拟器」与「官方 API」走完全相同的落库路径——接上官方 API 即直接可用，无需改轮询代码。
+    """
+    try:
+        check = get_adapter(request.platform).get_paid(request.platform_order_id)
+        return PaymentStatusResponse(paid=check.paid, reason=check.reason)
+    except ConfigError as e:
+        # 失败闭合：查不到就当未付款，绝不静默放行（Java 侧不改状态）。
+        return PaymentStatusResponse(paid=False, reason=f"向平台复核付款失败：{e}")
+    except Exception as e:  # noqa: BLE001
+        return PaymentStatusResponse(paid=False, reason=f"向平台复核付款异常：{e}")
 
 
 @router.get("/line2/inventory-warnings")

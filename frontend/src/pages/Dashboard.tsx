@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { getOperationPlans, listDailySales } from "../api/operations";
 import { getInventories } from "../api/inventories";
 import { getProducts } from "../api/products";
 import { getInventoryWarnings, generateRestockPlans } from "../api/line2";
 import { getCapabilities } from "../api/settings";
+import { getInsufficientSummary, recheckProductOrders } from "../api/orders";
 import { Icon } from "../components/icons";
-import type { DailySales, Inventory, InventoryWarning, OperationPlan, Product } from "../api/types";
+import type { DailySales, InsufficientStockSummary, Inventory, InventoryWarning, OperationPlan, Product } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches } from "../platforms";
 import LineChart from "../components/LineChart";
 import PageHeader from "../components/PageHeader";
@@ -27,10 +28,17 @@ function buildSeries(rows: DailySales[], metric: Metric) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // 从订单详情「前往销售监控补货」带过来的聚焦商品（focusProduct），用于滚动并高亮对应警告。
+  const focusProduct = Number(searchParams.get("focusProduct")) || 0;
   const [sales, setSales] = useState<DailySales[]>([]);
   const [inventories, setInventories] = useState<Inventory[]>([]);
   const [plans, setPlans] = useState<OperationPlan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // 库存不足订单按商品汇总（销售监控「库存不足订单」警告板块）。
+  const [insufficient, setInsufficient] = useState<InsufficientStockSummary[]>([]);
+  const [focusedProduct, setFocusedProduct] = useState(0);
+  const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
   // 预警板块（可选大模型）：独立加载，不阻塞上方的监控面板。
   const [warnings, setWarnings] = useState<InventoryWarning[]>([]);
   const [warnLoading, setWarnLoading] = useState(true);
@@ -41,6 +49,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [restockMsg, setRestockMsg] = useState<string | null>(null);
+  const [restockingId, setRestockingId] = useState<number | null>(null);
 
   // 销售趋势板块：下拉切换 营业额 / 销量
   const [trendMetric, setTrendMetric] = useState<Metric>("revenue");
@@ -52,16 +61,28 @@ export default function Dashboard() {
 
   // ① 监控面板：仅依赖 Java 业务数据，独立加载且永远秒开。
   useEffect(() => {
-    Promise.all([listDailySales(), getInventories(), getOperationPlans(), getProducts()])
-      .then(([s, inv, ps, ps2]) => {
+    Promise.all([listDailySales(), getInventories(), getOperationPlans(), getProducts(), getInsufficientSummary()])
+      .then(([s, inv, ps, ps2, ins]) => {
         setSales(s);
         setInventories(inv);
         setPlans(ps);
         setProducts(ps2);
+        setInsufficient(ins);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
+
+  // 从订单详情跳转过来时，滚动到对应商品并短暂高亮其库存不足警告。
+  useEffect(() => {
+    if (!focusProduct) return;
+    const el = rowRefs.current[focusProduct];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFocusedProduct(focusProduct);
+    const t = setTimeout(() => setFocusedProduct(0), 4000);
+    return () => clearTimeout(t);
+  }, [focusProduct, insufficient]);
 
   // ② 监控大模型能力探测（Python，纯本地判定、瞬间返回，不阻塞面板）。
   useEffect(() => {
@@ -105,6 +126,29 @@ export default function Dashboard() {
       setRestockMsg(`生成失败：${String(e)}`);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // 单商品「状态刷新」：补货完成后重算该商品库存不足订单状态（不改动库存），刷新汇总与水位。
+  async function handleRecheckProduct(productId: number) {
+    setRestockingId(productId);
+    setRestockMsg(null);
+    try {
+      const res = await recheckProductOrders(productId);
+      const [ins, inv] = await Promise.all([getInsufficientSummary(), getInventories()]);
+      setInsufficient(ins);
+      setInventories(inv);
+      const parts: string[] = [];
+      if (res.readyToShip > 0) parts.push(`翻回可发货 ${res.readyToShip} 笔`);
+      if (res.stillInsufficient > 0) parts.push(`仍不足 ${res.stillInsufficient} 笔`);
+      if (res.other > 0) parts.push(`转其他态 ${res.other} 笔`);
+      setRestockMsg(
+        `已为「${productName(productId)}」刷新状态：共 ${res.total} 笔（${parts.join("，") || "无变化"}）`
+      );
+    } catch (e) {
+      setRestockMsg(`刷新失败：${String(e)}`);
+    } finally {
+      setRestockingId(null);
     }
   }
 
@@ -323,6 +367,52 @@ export default function Dashboard() {
           <div className="notice notice-info" style={{ marginTop: 8 }}>{restockMsg}</div>
         )}
       </div>
+
+      {/* 库存不足订单：按商品汇总积压与缺口，从订单详情跳转时高亮对应商品 */}
+      {insufficient.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3>库存不足订单</h3>
+            <span className="badge badge-bad">需补货</span>
+          </div>
+          <div className="notice notice-error" style={{ marginTop: 4 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>以下商品有订单因库存不足挂起</div>
+            {insufficient.map((s) => {
+              const focused = focusedProduct === s.productId;
+              return (
+                <div
+                  key={s.productId}
+                  ref={(el) => {
+                    rowRefs.current[s.productId] = el;
+                  }}
+                  style={{
+                    marginBottom: 8,
+                    padding: focused ? "8px 10px" : undefined,
+                    borderRadius: 8,
+                    border: focused ? "1px solid #e5484d" : undefined,
+                    background: focused ? "#e5484d0f" : undefined,
+                  }}
+                >
+                  <strong>{s.productName}</strong>
+                  <span> · 积压 {s.orderCount} 笔订单、{s.backlogQuantity} 件</span>
+                  <div className="muted" style={{ marginTop: 2 }}>
+                    商品当前库存 {s.currentStock} 件，共缺 {s.shortQuantity} 件（补货后点下方刷新状态）
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    style={{ marginTop: 6 }}
+                    onClick={() => handleRecheckProduct(s.productId)}
+                    disabled={restockingId === s.productId}
+                  >
+                    {restockingId === s.productId ? <span className="spinner" /> : <Icon name="refresh" />}
+                    刷新状态
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">

@@ -14,9 +14,9 @@ from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.platform import PlatformOrder, PlanTarget, configured_platforms, get_adapter
+from app.platform import PlatformOrder, PlanTarget, PublishListingPayload, configured_platforms, get_adapter
 from app.settings_store import capabilities
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["platform"])
@@ -39,6 +39,25 @@ class PullOrdersResponse(BaseModel):
     orders: list[dict[str, Any]]
     platforms: list[str]
     warnings: list[str]
+
+
+class PublishListingRequest(BaseModel):
+    platform: str
+    plan_id: int | None = None
+    product_id: int | None = None
+    product_name: str | None = None
+    product_plan: dict[str, Any] = Field(default_factory=dict)
+    image_plan: dict[str, Any] = Field(default_factory=dict)
+    video_url: str | None = None
+
+
+class PublishListingResponse(BaseModel):
+    success: bool
+    platform: str
+    message: str
+    external_item_id: str | None = None
+    external_url: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/platform/pull-orders", response_model=PullOrdersResponse)
@@ -69,6 +88,22 @@ def pull_orders(request: PullOrdersRequest) -> PullOrdersResponse:
         for o in pulled:
             orders.append(asdict(o))
     return PullOrdersResponse(orders=orders, platforms=platforms_used, warnings=warnings)
+
+
+@router.post("/platform/publish-listing", response_model=PublishListingResponse)
+def publish_listing(request: PublishListingRequest) -> PublishListingResponse:
+    """Line 1 真实发布入口：平台未配置或真实 API 未实现时失败闭合，不返回假发布结果。"""
+    payload = PublishListingPayload(
+        platform=request.platform,
+        plan_id=request.plan_id,
+        product_id=request.product_id,
+        product_name=request.product_name,
+        product_plan=request.product_plan or {},
+        image_plan=request.image_plan or {},
+        video_url=request.video_url,
+    )
+    result = get_adapter(request.platform).publish_listing(payload)
+    return PublishListingResponse(**asdict(result))
 
 
 @router.get("/platform/status")

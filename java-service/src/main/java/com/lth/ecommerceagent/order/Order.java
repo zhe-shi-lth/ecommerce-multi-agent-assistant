@@ -61,6 +61,12 @@ public class Order {
     @Column(name = "fulfillment_suggestion_status", nullable = false, length = 40)
     private String fulfillmentSuggestionStatus;
 
+    // 待处理原因（仅 status=PENDING_ANALYSIS 时有意义；离开待分析后保留用于追溯）：
+    // UNPAID=仅未付款 / ADDRESS_INCOMPLETE=仅地址不全 / UNPAID_AND_ADDRESS=两者都有。
+    // 用于前端按原因归类、精准展示对应话术（催付 / 催补全地址），以及超时升级后区分来源。
+    @Column(name = "pending_reason", length = 30)
+    private String pendingReason;
+
     // 最近一次履约 Agent 重算的履约结论快照（JSONB；地址补全等场景回写）。
     @Column(name = "fulfillment_plan_json", columnDefinition = "JSONB")
     @JdbcTypeCode(SqlTypes.JSON)
@@ -106,6 +112,10 @@ public class Order {
     // 平台是否对收件人信息加密（抖音密文电子面单 / 小红书加密收件人）
     @Column(name = "encrypted", nullable = false)
     private Boolean encrypted = false;
+
+    // 发货时间（仅 status=SHIPPED 有值）；发货闭环的终态标记。
+    @Column(name = "shipped_at")
+    private Instant shippedAt;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -201,6 +211,36 @@ public class Order {
 
     public void setFulfillmentSuggestionStatus(String fulfillmentSuggestionStatus) {
         this.fulfillmentSuggestionStatus = fulfillmentSuggestionStatus;
+    }
+
+    public String getPendingReason() {
+        return pendingReason;
+    }
+
+    public void setPendingReason(String pendingReason) {
+        this.pendingReason = pendingReason;
+    }
+
+    /**
+     * 由「付款 / 地址完整 / 状态」推导待处理原因枚举。
+     * 仅当 status=PENDING_ANALYSIS 才有意义；其余状态返回 null（不是待处理）。
+     */
+    public static String computePendingReason(Boolean paid, Boolean addressComplete, String status) {
+        if (!"PENDING_ANALYSIS".equals(status)) {
+            return null;
+        }
+        boolean unpaid = Boolean.FALSE.equals(paid);
+        boolean addrIncomplete = Boolean.FALSE.equals(addressComplete);
+        if (unpaid && addrIncomplete) {
+            return "UNPAID_AND_ADDRESS";
+        }
+        if (unpaid) {
+            return "UNPAID";
+        }
+        if (addrIncomplete) {
+            return "ADDRESS_INCOMPLETE";
+        }
+        return null;
     }
 
     public Map<String, Object> getFulfillmentPlanJson() {
@@ -305,6 +345,14 @@ public class Order {
 
     public void setEncrypted(Boolean encrypted) {
         this.encrypted = encrypted;
+    }
+
+    public Instant getShippedAt() {
+        return shippedAt;
+    }
+
+    public void setShippedAt(Instant shippedAt) {
+        this.shippedAt = shippedAt;
     }
 
     public Instant getCreatedAt() {

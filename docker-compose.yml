@@ -54,8 +54,6 @@ services:
       LLM_ENABLED: "true"
       RAG_ENABLED: "false"
       JAVA_API_BASE_URL: http://java:8080
-      ORDER_MONITOR_MODE: "demo"
-      ORDER_MONITOR_DEMO_SUCCESS_RATE: "0.5"
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_API_KEY: ${SERVICE_API_KEY}
     depends_on:

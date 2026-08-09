@@ -8,6 +8,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+
+import java.util.HashMap;
+import java.util.Map;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
@@ -100,9 +103,27 @@ public class PythonAgentClient {
         }
     }
 
+    public PythonPaymentVerifyResult verifyPayment(PythonOrderVerifyRequest request) {
+        String url = baseUrl + "/agent/ecommerce/order-monitor/verify-payment";
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Service-Key", serviceKey);
+            HttpEntity<PythonOrderVerifyRequest> entity = new HttpEntity<>(request, headers);
+            PythonPaymentVerifyResult result =
+                    restTemplate.postForObject(url, entity, PythonPaymentVerifyResult.class);
+            if (result == null) {
+                throw new PythonAgentException("Python agent 返回空响应: " + url);
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new PythonAgentException("无法连接 Python agent (" + url + "): " + e.getMessage(), e);
+        } catch (RestClientException e) {
+            throw new PythonAgentException("调用 Python agent 失败 (" + url + "): " + e.getMessage(), e);
+        }
+    }
+
     /**
-     * 从各平台开放 API 拉取真实订单（Python 只做协议翻译，落库仍在 Java）。
-     *
+     * 从各平台开放 API 拉取真实订单（Python 只做协议翻译，落库仍在 Java）。     *
      * <p>平台未对接 / 凭证缺失时，Python 会以中文原因返回 4xx，这里原样抛给上层，
      * 让最终用户看到"该去哪补什么"，而不是悄悄回退到模拟数据。
      */
@@ -122,6 +143,28 @@ public class PythonAgentClient {
             throw new PythonAgentException("无法连接订单拉取服务：" + e.getMessage(), e);
         } catch (RestClientException e) {
             throw new PythonAgentException(detailOf(e), e);
+        }
+    }
+
+    /**
+     * Line 1 真实发布入口：发布属于外部副作用，Python 不允许回退到模拟发布。
+     */
+    public PythonPublishListingResult publishListing(PythonPublishListingRequest request) {
+        String url = baseUrl + "/agent/ecommerce/platform/publish-listing";
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Service-Key", serviceKey);
+            HttpEntity<PythonPublishListingRequest> entity = new HttpEntity<>(request, headers);
+            PythonPublishListingResult result =
+                    restTemplate.postForObject(url, entity, PythonPublishListingResult.class);
+            if (result == null) {
+                throw new PythonAgentException("平台发布返回空响应");
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new PythonAgentException("无法连接平台发布服务：" + e.getMessage(), e);
+        } catch (RestClientException e) {
+            throw new PythonAgentException(detailOf(e, "平台发布失败"), e);
         }
     }
 
@@ -149,8 +192,70 @@ public class PythonAgentClient {
         }
     }
 
+    /**
+     * 查询某平台订单的地址完整标记（**模式无关**，供定时轮询复用）。
+     * 直接走 Python 的 PlatformAdapter.get_address_complete：已配置真实凭证 → 调官方 API；
+     * 未配置（模拟器模式）→ 返回同构的模拟真相。失败时 Python 返回 complete=false + 原因，
+     * 这里按失败闭合处理（不改订单状态）。
+     */
+    public PythonAddressStatusResult checkAddressStatus(String platform, String platformOrderId) {
+        String url = baseUrl + "/agent/ecommerce/order-monitor/address-status";
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Service-Key", serviceKey);
+            Map<String, String> body = new java.util.HashMap<>();
+            body.put("platform", platform);
+            body.put("platform_order_id", platformOrderId);
+            HttpEntity<java.util.Map<String, String>> entity = new HttpEntity<>(body, headers);
+            ResponseEntity<PythonAddressStatusResult> resp =
+                    restTemplate.postForEntity(url, entity, PythonAddressStatusResult.class);
+            PythonAddressStatusResult result = resp.getBody();
+            if (result == null) {
+                throw new PythonAgentException("查询平台地址状态返回空响应");
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new PythonAgentException("无法连接订单拉取服务：" + e.getMessage(), e);
+        } catch (RestClientException e) {
+            throw new PythonAgentException(detailOf(e), e);
+        }
+    }
+
+    /**
+     * 查询某平台订单的付款标记（**模式无关**，供定时轮询复用），对称 checkAddressStatus。
+     * 直接走 Python 的 PlatformAdapter.get_paid：已配置真实凭证 → 调官方 API；
+     * 未配置（模拟器模式）→ 返回同构的模拟真相。失败时 Python 返回 paid=false + 原因，
+     * 这里按失败闭合处理（不改订单状态）。
+     */
+    public PythonPaymentStatusResult checkPaymentStatus(String platform, String platformOrderId) {
+        String url = baseUrl + "/agent/ecommerce/order-monitor/payment-status";
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Service-Key", serviceKey);
+            Map<String, String> body = new java.util.HashMap<>();
+            body.put("platform", platform);
+            body.put("platform_order_id", platformOrderId);
+            HttpEntity<java.util.Map<String, String>> entity = new HttpEntity<>(body, headers);
+            ResponseEntity<PythonPaymentStatusResult> resp =
+                    restTemplate.postForEntity(url, entity, PythonPaymentStatusResult.class);
+            PythonPaymentStatusResult result = resp.getBody();
+            if (result == null) {
+                throw new PythonAgentException("查询平台付款状态返回空响应");
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new PythonAgentException("无法连接订单拉取服务：" + e.getMessage(), e);
+        } catch (RestClientException e) {
+            throw new PythonAgentException(detailOf(e), e);
+        }
+    }
+
     /** 优先取 Python 4xx 响应体里的 detail（中文可读原因），取不到再退回原始异常信息。 */
     private String detailOf(RestClientException e) {
+        return detailOf(e, "拉取平台订单失败");
+    }
+
+    private String detailOf(RestClientException e, String fallbackPrefix) {
         if (e instanceof HttpStatusCodeException http) {
             try {
                 String detail = OBJECT_MAPPER
@@ -164,6 +269,6 @@ public class PythonAgentClient {
                 // 响应体不是 JSON 或没有 detail：走下面的兜底
             }
         }
-        return "拉取平台订单失败：" + e.getMessage();
+        return fallbackPrefix + "：" + e.getMessage();
     }
 }

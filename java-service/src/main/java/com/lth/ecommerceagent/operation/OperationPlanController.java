@@ -25,6 +25,10 @@ import com.lth.ecommerceagent.order.Order;
 import com.lth.ecommerceagent.order.OrderRepository;
 import com.lth.ecommerceagent.product.Product;
 import com.lth.ecommerceagent.product.ProductRepository;
+import com.lth.ecommerceagent.python.PythonAgentClient;
+import com.lth.ecommerceagent.python.PythonAgentException;
+import com.lth.ecommerceagent.python.PythonPublishListingRequest;
+import com.lth.ecommerceagent.python.PythonPublishListingResult;
 
 @RestController
 @RequestMapping("/api/operation-plans")
@@ -34,16 +38,19 @@ public class OperationPlanController {
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
     private final InventoryRepository inventoryRepository;
+    private final PythonAgentClient pythonAgentClient;
 
     public OperationPlanController(
             OperationPlanRepository operationPlanRepository,
             ProductRepository productRepository,
             OrderRepository orderRepository,
-            InventoryRepository inventoryRepository) {
+            InventoryRepository inventoryRepository,
+            PythonAgentClient pythonAgentClient) {
         this.operationPlanRepository = operationPlanRepository;
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
         this.inventoryRepository = inventoryRepository;
+        this.pythonAgentClient = pythonAgentClient;
     }
 
     @PostMapping
@@ -126,6 +133,21 @@ public class OperationPlanController {
         return o instanceof Map ? (Map<String, Object>) o : Map.of();
     }
 
+    private Map<String, Object> withPublishResult(
+            Map<String, Object> productPlanJson,
+            PythonPublishListingResult publishResult) {
+        Map<String, Object> next = new HashMap<>(productPlanJson != null ? productPlanJson : Map.of());
+        Map<String, Object> publish = new HashMap<>();
+        publish.put("success", publishResult.success());
+        publish.put("platform", publishResult.platform());
+        publish.put("message", publishResult.message());
+        publish.put("external_item_id", publishResult.externalItemId());
+        publish.put("external_url", publishResult.externalUrl());
+        publish.put("raw", publishResult.raw());
+        next.put("publish_result", publish);
+        return next;
+    }
+
     @GetMapping("/by-trace/{traceId}")
     public OperationPlanResponse getByTrace(@PathVariable String traceId) {
         OperationPlan plan = operationPlanRepository.findByTraceId(traceId)
@@ -188,12 +210,27 @@ public class OperationPlanController {
                     .body(toResponse(plan, false, auditMessage));
         }
 
+        PythonPublishListingResult publishResult;
+        try {
+            publishResult = pythonAgentClient.publishListing(PythonPublishListingRequest.from(plan));
+        } catch (PythonAgentException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(toResponse(plan, false, "平台发布失败：" + e.getMessage()));
+        }
+        if (!Boolean.TRUE.equals(publishResult.success())) {
+            String message = publishResult.message() == null || publishResult.message().isBlank()
+                    ? "平台发布失败：未返回成功状态"
+                    : "平台发布失败：" + publishResult.message();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(toResponse(plan, false, message));
+        }
+
+        plan.setProductPlanJson(withPublishResult(plan.getProductPlanJson(), publishResult));
         plan.setConfirmationStatus("CONFIRMED");
         plan.setConfirmedAt(Instant.now());
         product.setStatus("PUBLISHED");
         productRepository.save(product);
         OperationPlan saved = operationPlanRepository.save(plan);
-        return ResponseEntity.ok(toResponse(saved, true, auditMessage));
+        return ResponseEntity.ok(toResponse(saved, true, "平台发布成功：" + publishResult.message()));
     }
 
     @PostMapping("/{id}/reject")

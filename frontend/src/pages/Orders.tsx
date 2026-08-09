@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getOrders } from "../api/orders";
+import { getOrders, recheckAllOrders } from "../api/orders";
 import { getProducts } from "../api/products";
 import type { Order, Product } from "../api/types";
 import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../platforms";
@@ -16,10 +16,19 @@ const STATUS_META: Record<string, { label: string; tone: Tone }> = {
   PENDING_ANALYSIS: { label: "待分析", tone: "warn" },
   NEEDS_REVIEW: { label: "需人工审核", tone: "bad" },
   INSUFFICIENT_STOCK: { label: "库存不足", tone: "bad" },
+  SHIPPED: { label: "已发货", tone: "ok" },
+  REJECTED: { label: "已驳回", tone: "bad" },
 };
 function statusMeta(s: string): { label: string; tone: Tone } {
   return STATUS_META[s] ?? { label: s, tone: "neutral" };
 }
+
+// 待处理原因 → 中文标签（仅 status=PENDING_ANALYSIS 有值）。
+const PENDING_REASON_LABEL: Record<string, string> = {
+  UNPAID: "待付款",
+  ADDRESS_INCOMPLETE: "地址不全",
+  UNPAID_AND_ADDRESS: "未付款且地址不全",
+};
 
 function Badge({ label, tone }: { label: string; tone: Tone }) {
   return <span className={`badge badge-${tone}`}>{label}</span>;
@@ -33,6 +42,7 @@ interface Filters {
   paid: string; // ALL / PAID / UNPAID
   address: string; // ALL / COMPLETE / INCOMPLETE
   manualReview: string; // ALL / YES / NO
+  pendingReason: string; // ALL / UNPAID / ADDRESS_INCOMPLETE / UNPAID_AND_ADDRESS
   onlyIssues: boolean;
   dateFrom: string; // YYYY-MM-DD
   dateTo: string;
@@ -46,6 +56,7 @@ const EMPTY_FILTERS: Filters = {
   paid: "ALL",
   address: "ALL",
   manualReview: "ALL",
+  pendingReason: "ALL",
   onlyIssues: false,
   dateFrom: "",
   dateTo: "",
@@ -58,6 +69,8 @@ export default function Orders() {
   const [products, setProducts] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ msg: string; tone: "ok" | "error" } | null>(null);
   const navigate = useNavigate();
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -117,6 +130,7 @@ export default function Orders() {
       if (filters.address === "INCOMPLETE" && o.addressComplete) return false;
       if (filters.manualReview === "YES" && !o.manualReviewRequired) return false;
       if (filters.manualReview === "NO" && o.manualReviewRequired) return false;
+      if (filters.pendingReason !== "ALL" && (o.pendingReason ?? "") !== filters.pendingReason) return false;
       if (filters.onlyIssues && issueCount(o) === 0) return false;
       const day = dayOf(o.createdAt);
       if (filters.dateFrom && day < filters.dateFrom) return false;
@@ -138,6 +152,33 @@ export default function Orders() {
 
   const hasFilter = JSON.stringify(filters) !== JSON.stringify(EMPTY_FILTERS);
 
+  const insufficientCount = rows.filter((o) => o.status === "INSUFFICIENT_STOCK").length;
+
+  // 批量「缺货订单状态刷新」：补货完成后按当前库存重算所有库存不足订单状态（不改动库存），刷新列表并提示结果。
+  async function handleRecheckAll() {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const res = await recheckAllOrders();
+      setRows(await getOrders()); // 刷新列表，反映翻回的状态
+      const parts: string[] = [];
+      if (res.readyToShip > 0) parts.push(`翻回可发货 ${res.readyToShip} 笔`);
+      if (res.stillInsufficient > 0) parts.push(`仍不足 ${res.stillInsufficient} 笔`);
+      if (res.other > 0) parts.push(`转其他态 ${res.other} 笔`);
+      setFeedback({
+        msg:
+          res.total === 0
+            ? "当前没有库存不足订单。"
+            : `共刷新 ${res.total} 笔：${parts.join("，") || "无变化"}`,
+        tone: res.readyToShip > 0 || (res.total > 0 && res.stillInsufficient === 0) ? "ok" : "error",
+      });
+    } catch (e) {
+      setFeedback({ msg: String(e), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section>
       <PageHeader
@@ -145,6 +186,24 @@ export default function Orders() {
         subtitle="订单履约看板：一眼看清哪些能发、哪些要处理。"
         icon={<Icon name="orders" />}
       />
+
+      {!loading && !error && insufficientCount > 0 && (
+        <div
+          className="notice notice-error"
+          style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}
+        >
+          <span>有 {insufficientCount} 笔订单因库存不足挂起（补货后点此刷新状态）。</span>
+          <button className="btn btn-primary btn-sm" onClick={handleRecheckAll} disabled={busy}>
+            {busy ? <span className="spinner" /> : <Icon name="refresh" />}
+            缺货订单状态刷新
+          </button>
+        </div>
+      )}
+      {feedback && (
+        <div className={`notice ${feedback.tone === "error" ? "notice-error" : "notice-ok"}`} style={{ marginBottom: 16 }}>
+          {feedback.msg}
+        </div>
+      )}
 
       {loading && (
         <div className="loading">
@@ -246,6 +305,19 @@ export default function Orders() {
             </select>
           </div>
           <div className="filter-item">
+            <label className="filter-label">待处理原因</label>
+            <select
+              className="header-select"
+              value={filters.pendingReason}
+              onChange={(e) => updateFilter("pendingReason", e.target.value)}
+            >
+              <option value="ALL">全部</option>
+              <option value="UNPAID">待付款</option>
+              <option value="ADDRESS_INCOMPLETE">地址不全</option>
+              <option value="UNPAID_AND_ADDRESS">未付款且地址不全</option>
+            </select>
+          </div>
+          <div className="filter-item">
             <label className="filter-label">下单起</label>
             <input
               type="date"
@@ -329,6 +401,9 @@ export default function Orders() {
                         {o.addressComplete ? "地址完整" : "地址不全"}
                       </span>
                       {o.manualReviewRequired && <span className="mini warn">需审核</span>}
+                      {o.pendingReason && PENDING_REASON_LABEL[o.pendingReason] && (
+                        <span className="mini bad">{PENDING_REASON_LABEL[o.pendingReason]}</span>
+                      )}
                       {issueN > 0 && <span className="mini bad">待处理 {issueN}</span>}
                     </div>
                   </div>

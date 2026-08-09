@@ -12,12 +12,20 @@ def test_get_adapter_unknown_platform():
         get_adapter("weibo")
 
 
-def test_unconfigured_adapter_require_ready_raises():
-    # 默认 taobao 未开启 → require_ready 抛中文 ConfigError
+def test_unconfigured_adapter_get_address_complete_falls_back_to_simulator():
+    # 默认 taobao 未开启（模拟器模式）：require_ready 仍抛中文 ConfigError
     adapter = get_adapter("taobao")
     with pytest.raises(ConfigError) as exc:
-        adapter.get_address_complete("123")
+        adapter.require_ready()
     assert "平台对接" in str(exc.value)
+
+    # 但 get_address_complete 模式无关：未配置时返回同构的模拟真相（不抛），充当官方 API 替身。
+    check = adapter.get_address_complete("MOCK1700000000000123456")
+    assert isinstance(check, AddressCheck)
+    # 同一单号结果稳定（模拟器真相是确定性的）
+    assert adapter.get_address_complete("MOCK1700000000000123456").complete == check.complete
+    # 不同单号按哈希分布，绝不会抛
+    assert adapter.get_address_complete("MOCK1700000000000987654").complete in (True, False)
 
 
 def test_configured_adapter_todo_scaffold_fails_closed():

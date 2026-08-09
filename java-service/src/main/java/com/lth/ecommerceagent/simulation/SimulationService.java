@@ -287,6 +287,8 @@ public class SimulationService {
         order.setQuantity(po.quantity());
         order.setStatus(status);
         order.setFulfillmentSuggestionStatus(status);
+        // 待处理原因仅在待分析态有值：据付款/地址推导，前端据此归类与路由话术。
+        order.setPendingReason(Order.computePendingReason(po.paid(), po.addressComplete(), status));
         order.setPaid(po.paid());
         order.setAddressComplete(po.addressComplete());
         order.setManualReviewRequired(po.manualReviewRequired());

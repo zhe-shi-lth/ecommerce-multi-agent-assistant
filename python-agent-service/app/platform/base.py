@@ -9,6 +9,8 @@ Java 同一事务内完成（Java 是唯一数据源）。Python 不碰数据库
 """
 from __future__ import annotations
 
+import hashlib
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +27,14 @@ class AddressCheck:
 
 
 @dataclass
+class PaymentCheck:
+    """付款复核结果（平台中立）。"""
+
+    paid: bool
+    reason: str
+
+
+@dataclass
 class PlanTarget:
     """Java 传来的「已确认运营计划」，供适配器把平台商品映射回本地 product_id。"""
 
@@ -33,6 +43,31 @@ class PlanTarget:
     plan_id: int | None = None
     product_name: str | None = None
     platform_item_id: str | None = None  # 预留：平台商品 ID / outer_id，用于真实 SKU 映射
+
+
+@dataclass
+class PublishListingPayload:
+    """Line 1 发布适配器的中立入参：Java 只传业务事实，平台协议在 Python 翻译。"""
+
+    platform: str
+    product_id: int | None = None
+    plan_id: int | None = None
+    product_name: str | None = None
+    product_plan: dict[str, Any] = field(default_factory=dict)
+    image_plan: dict[str, Any] = field(default_factory=dict)
+    video_url: str | None = None
+
+
+@dataclass
+class PublishResult:
+    """平台发布结果的中立结构，供 Java 写回发布状态和外部商品映射。"""
+
+    success: bool
+    platform: str
+    message: str
+    external_item_id: str | None = None
+    external_url: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -95,17 +130,93 @@ class PlatformAdapter(ABC):
             if not (self._creds.get(field_name) or "").strip():
                 raise ConfigError(f"「{self.label}」平台对接缺少{cn}：请在设置中心 → 平台对接填写")
 
-    @abstractmethod
     def get_address_complete(self, platform_order_id: str) -> AddressCheck:
-        """读取收件人地址完整标记（address_complete）。
+        """读取收件人地址完整标记（address_complete），模式无关。
 
-        platform_order_id 是平台单号（非本地 orders.id）；缺平台单号由调用方负责拒绝。
+        本方法是「模拟器 = 官方 API 替身」的关键接缝：
+        - 已配置真实凭证 → 走 `_address_complete_real` 调平台开放 API（实现见各适配器 TODO）；
+        - 未配置（模拟器模式）→ 由 `_simulated_address_complete` 返回与平台同构的模拟真相，
+          使系统在没有接官方 API 时也能完整演练「地址不全 → 定时器轮询到已补全 → 自动流转」。
+
+        真实适配器未实现（TODO 桩）时 `_address_complete_real` 抛 `ConfigError`，由调用方失败闭合。
         """
+        try:
+            self.require_ready()
+        except ConfigError:
+            # 未配置真实凭证：模拟器模式，返回同构的模拟真相（不做真实网络调用）。
+            return self._simulated_address_complete(platform_order_id)
+        return self._address_complete_real(platform_order_id)
+
+    @abstractmethod
+    def _address_complete_real(self, platform_order_id: str) -> AddressCheck:
+        """已配置真实凭证时，调平台开放 API 读取 address_complete（由各适配器实现）。"""
         raise NotImplementedError
+
+    def _simulated_address_complete(self, platform_order_id: str) -> AddressCheck:
+        """模拟器模式下的地址完整真相：用平台单号做稳定哈希，约 60% 判定为「买家已补全」。
+
+        稳定（同一单号每次结果一致），因此定时轮询看到的是「买家是否补全」这一事实，
+        而非随机抖动——模拟器在此充当官方 API 的替身。接上真实凭证后自动改走 `_address_complete_real`。
+        """
+        raw = (platform_order_id or "").replace("MOCK", "")
+        if not raw:
+            return AddressCheck(False, "平台复核：该订单缺少平台单号（模拟器）")
+        digest = hashlib.md5(raw.encode("utf-8")).hexdigest()
+        healed = (int(digest, 16) % 10) < 6  # 约 60% 已补全
+        if healed:
+            return AddressCheck(True, "平台确认：买家已补全收货地址（模拟器）")
+        return AddressCheck(False, "平台复核：收货地址仍不完整（模拟器）")
+
+    def get_paid(self, platform_order_id: str) -> PaymentCheck:
+        """读取付款标记（paid），模式无关，与 get_address_complete 完全同构。
+
+        这是「模拟器 = 官方 API 替身」在付款维度的同一接缝：
+        - 已配置真实凭证 → 走 `_paid_real` 调平台开放 API（实现见各适配器 TODO）；
+        - 未配置（模拟器模式）→ 由 `_simulated_paid` 返回与平台同构的模拟真相，
+          使系统在没有接官方 API 时也能完整演练「未付款 → 定时器轮询到已付款 → 自动流转」。
+
+        真实适配器未实现（TODO 桩）时 `_paid_real` 抛 `ConfigError`，由调用方失败闭合。
+        """
+        try:
+            self.require_ready()
+        except ConfigError:
+            # 未配置真实凭证：模拟器模式，返回同构的模拟真相（不做真实网络调用）。
+            return self._simulated_paid(platform_order_id)
+        return self._paid_real(platform_order_id)
+
+    @abstractmethod
+    def _paid_real(self, platform_order_id: str) -> PaymentCheck:
+        """已配置真实凭证时，调平台开放 API 读取 paid（由各适配器实现）。"""
+        raise NotImplementedError
+
+    def _simulated_paid(self, platform_order_id: str) -> PaymentCheck:
+        """模拟器模式下的付款真相：用平台单号做稳定哈希，约 60% 判定为「已付款」。
+
+        稳定（同一单号每次结果一致），与 `_simulated_address_complete` 同构——定时轮询看到的是
+        「买家是否付款」这一事实，而非随机抖动。接上真实凭证后自动改走 `_paid_real`。
+        """
+        raw = (platform_order_id or "").replace("MOCK", "")
+        if not raw:
+            return PaymentCheck(False, "平台复核：该订单缺少平台单号（模拟器）")
+        digest = hashlib.md5(raw.encode("utf-8")).hexdigest()
+        paid = (int(digest, 16) % 10) < 6  # 约 60% 已付款
+        if paid:
+            return PaymentCheck(True, "平台确认：买家已付款（模拟器）")
+        return PaymentCheck(False, "平台复核：订单仍未付款（模拟器）")
 
     @abstractmethod
     def list_orders(self, plans: list[PlanTarget], since_days: int) -> list[PlatformOrder]:
         """拉取指定计划关联的订单（按 since_days 回看）。"""
+        raise NotImplementedError
+
+    def publish_listing(self, payload: PublishListingPayload) -> PublishResult:
+        """真实发布入口：发布属于外部副作用，必须失败闭合，不走模拟数据。"""
+        self.require_ready()
+        return self._publish_listing_real(payload)
+
+    @abstractmethod
+    def _publish_listing_real(self, payload: PublishListingPayload) -> PublishResult:
+        """已配置真实凭证时，把中立商品/素材/文案结构映射到平台上架 API。"""
         raise NotImplementedError
 
     def get_order(self, platform_order_id: str) -> PlatformOrder | None:
