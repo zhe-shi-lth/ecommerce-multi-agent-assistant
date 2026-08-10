@@ -1,4 +1,4 @@
-/* =========================================================================
+﻿/* =========================================================================
    设计系统：现代简约浅色 SaaS · 强调色 小红书红 #ff2442
    纯手写 CSS，不依赖任何 UI 库。
    ========================================================================= */
@@ -2624,4 +2624,180 @@ select.header-select {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* ============================ 订单概览条 ============================ */
+.ov-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.ov-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+.ov-tile::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--text-3);
+}
+.ov-tile.ov-ok::before { background: var(--ok); }
+.ov-tile.ov-bad::before { background: var(--bad); }
+.ov-tile.ov-warn::before { background: var(--warn); }
+.ov-tile.ov-neutral::before { background: var(--text-3); }
+.ov-value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.ov-tile.ov-ok .ov-value { color: var(--ok); }
+.ov-tile.ov-bad .ov-value { color: var(--bad); }
+.ov-tile.ov-warn .ov-value { color: var(--warn); }
+.ov-label {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* ============================ 采购补货：KPI 概览 + 行布局 ============================ */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.kpi-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.kpi-tile:hover {
+  border-color: var(--border-strong);
+}
+.kpi-value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.kpi-label {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.kpi-tile.kpi-bad {
+  border-color: #f0c2cb;
+  background: var(--bad-weak);
+}
+.kpi-tile.kpi-bad .kpi-value {
+  color: var(--bad);
+}
+.kpi-tile.kpi-bad:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.pr-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+}
+.pr-search {
+  width: 240px;
+  flex: 0 0 auto;
+}
+.pr-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-row:last-child {
+  border-bottom: none;
+}
+.pr-row-name {
+  min-width: 150px;
+  font-weight: 600;
+  color: var(--text);
+}
+.pr-row-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.pr-row-spacer {
+  flex: 1;
+}
+.pr-qty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pr-qty input {
+  width: 88px;
+}
+.pr-qty-unit {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* 创建采购单弹窗表单（成本闭环） */
+.pr-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.pr-form-grid .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pr-form-grid .field > span {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.pr-form-grid .field .filter-input,
+.pr-form-grid .field .header-select {
+  width: 100%;
+}
+.pr-cost-summary {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: #fafafb;
+  border: 1px solid var(--border, #ececf0);
+  border-radius: 10px;
+}
+.pr-cost-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pr-cost-summary strong {
+  font-size: 16px;
+  color: var(--text-1);
 }

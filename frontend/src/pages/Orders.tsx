@@ -7,6 +7,7 @@ import { PLATFORMS, platformLabel, platformMatches, platformTone } from "../plat
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import { errMsg } from "../utils/errMsg";
 
 type Tone = "ok" | "warn" | "bad" | "neutral";
 
@@ -84,7 +85,7 @@ export default function Orders() {
         setRows(os);
         setProducts(ps);
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(errMsg(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -155,6 +156,27 @@ export default function Orders() {
 
   const insufficientCount = rows.filter((o) => o.status === "INSUFFICIENT_STOCK").length;
 
+  // 顶部概览：按状态聚合，运营一眼看清履约态势（统计全量，不随筛选变化）。
+  const overview = useMemo(() => {
+    const c = { ready: 0, shipped: 0, shipFailed: 0, insufficient: 0, other: 0 };
+    for (const o of rows) {
+      if (o.status === "READY_TO_SHIP") c.ready++;
+      else if (o.status === "SHIPPED") c.shipped++;
+      else if (o.status === "SHIPPING_FAILED") c.shipFailed++;
+      else if (o.status === "INSUFFICIENT_STOCK") c.insufficient++;
+      else c.other++;
+    }
+    return c;
+  }, [rows]);
+
+  const overviewTiles = [
+    { key: "ready", label: "可发货", value: overview.ready, tone: "ok" as const },
+    { key: "shipped", label: "已发货", value: overview.shipped, tone: "neutral" as const },
+    { key: "shipFailed", label: "发货失败", value: overview.shipFailed, tone: "bad" as const },
+    { key: "insufficient", label: "库存不足", value: overview.insufficient, tone: "bad" as const },
+    { key: "other", label: "其他待处理", value: overview.other, tone: "warn" as const },
+  ];
+
   // 批量「缺货订单状态刷新」：补货完成后按当前库存重算所有库存不足订单状态（不改动库存），刷新列表并提示结果。
   async function handleRecheckAll() {
     setBusy(true);
@@ -174,7 +196,7 @@ export default function Orders() {
         tone: res.readyToShip > 0 || (res.total > 0 && res.stillInsufficient === 0) ? "ok" : "error",
       });
     } catch (e) {
-      setFeedback({ msg: String(e), tone: "error" });
+      setFeedback({ msg: errMsg(e), tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -187,6 +209,17 @@ export default function Orders() {
         subtitle="订单履约看板：一眼看清哪些能发、哪些要处理。"
         icon={<Icon name="orders" />}
       />
+
+      {!loading && !error && rows.length > 0 && (
+        <div className="ov-strip">
+          {overviewTiles.map((t) => (
+            <div className={`ov-tile ov-${t.tone}`} key={t.key}>
+              <div className="ov-value">{t.value}</div>
+              <div className="ov-label">{t.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {!loading && !error && insufficientCount > 0 && (
         <div
@@ -215,15 +248,17 @@ export default function Orders() {
       {error && <div className="notice notice-error">加载失败：{error}</div>}
 
       {!loading && !error && rows.length > 0 && (
-        <div className="filter-bar">
-          <div className="filter-item filter-grow">
-            <input
-              className="filter-input"
-              placeholder="搜索订单 ID 或商品名"
-              value={filters.keyword}
-              onChange={(e) => updateFilter("keyword", e.target.value)}
-            />
-          </div>
+        <>
+          <h2 className="board-title">订单列表</h2>
+          <div className="filter-bar">
+            <div className="filter-item filter-grow">
+              <input
+                className="filter-input"
+                placeholder="搜索订单 ID 或商品名"
+                value={filters.keyword}
+                onChange={(e) => updateFilter("keyword", e.target.value)}
+              />
+            </div>
           <div className="filter-item">
             <label className="filter-label">状态</label>
             <select
@@ -356,6 +391,7 @@ export default function Orders() {
             </button>
           )}
         </div>
+        </>
       )}
 
       {!loading && !error && rows.length === 0 && <EmptyState text="暂无订单数据。" icon="🧾" />}

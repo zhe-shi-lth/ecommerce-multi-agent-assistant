@@ -1,8 +1,10 @@
 package com.lth.ecommerceagent.purchase;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 import com.lth.ecommerceagent.product.Product;
+import com.lth.ecommerceagent.supplier.Supplier;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -42,8 +44,46 @@ public class PurchaseOrder {
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
 
+    // —— 成本核算字段（成本闭环，与订单发货运费严格区分）——
+    @Column(name = "unit_cost", precision = 12, scale = 2)
+    private BigDecimal unitCost;
+
+    // 商品金额 = unit_cost * quantity
+    @Column(name = "product_amount", precision = 14, scale = 2)
+    private BigDecimal productAmount;
+
+    // 进货运费：供应商发到卖家仓库的运费
+    @Column(name = "purchase_shipping_fee", precision = 12, scale = 2)
+    private BigDecimal purchaseShippingFee;
+
+    // 总成本 = product_amount + purchase_shipping_fee
+    @Column(name = "total_cost", precision = 14, scale = 2)
+    private BigDecimal totalCost;
+
+    // 单件综合成本 = total_cost / actual_quantity（入库后写回商品 cost_price）
+    @Column(name = "landed_unit_cost", precision = 12, scale = 2)
+    private BigDecimal landedUnitCost;
+
+    // 预计到货时间
+    @Column(name = "expected_arrival_at")
+    private Instant expectedArrivalAt;
+
+    // 实际入库数量（默认 = quantity；现实可能到货少于下单）
+    @Column(name = "actual_quantity")
+    private Integer actualQuantity;
+
+    // 入库备注（破损 / 少发说明等）
+    @Column(name = "inbound_note", length = 500)
+    private String inboundNote;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "supplier_id")
+    private Supplier supplierRef;
+
+    // 商家名称快照（落库时写入，防止商家改名/删除后历史采购单信息错乱）。
+    // 复用原 supplier 文本列，避免新增列与历史数据迁移。
     @Column(name = "supplier", length = 120)
-    private String supplier;
+    private String supplierName;
 
     @Column(name = "status", nullable = false, length = 40)
     private String status;
@@ -92,12 +132,84 @@ public class PurchaseOrder {
         this.quantity = quantity;
     }
 
-    public String getSupplier() {
-        return supplier;
+    public BigDecimal getUnitCost() {
+        return unitCost;
     }
 
-    public void setSupplier(String supplier) {
-        this.supplier = supplier;
+    public void setUnitCost(BigDecimal unitCost) {
+        this.unitCost = unitCost;
+    }
+
+    public BigDecimal getProductAmount() {
+        return productAmount;
+    }
+
+    public void setProductAmount(BigDecimal productAmount) {
+        this.productAmount = productAmount;
+    }
+
+    public BigDecimal getPurchaseShippingFee() {
+        return purchaseShippingFee;
+    }
+
+    public void setPurchaseShippingFee(BigDecimal purchaseShippingFee) {
+        this.purchaseShippingFee = purchaseShippingFee;
+    }
+
+    public BigDecimal getTotalCost() {
+        return totalCost;
+    }
+
+    public void setTotalCost(BigDecimal totalCost) {
+        this.totalCost = totalCost;
+    }
+
+    public BigDecimal getLandedUnitCost() {
+        return landedUnitCost;
+    }
+
+    public void setLandedUnitCost(BigDecimal landedUnitCost) {
+        this.landedUnitCost = landedUnitCost;
+    }
+
+    public Instant getExpectedArrivalAt() {
+        return expectedArrivalAt;
+    }
+
+    public void setExpectedArrivalAt(Instant expectedArrivalAt) {
+        this.expectedArrivalAt = expectedArrivalAt;
+    }
+
+    public Integer getActualQuantity() {
+        return actualQuantity;
+    }
+
+    public void setActualQuantity(Integer actualQuantity) {
+        this.actualQuantity = actualQuantity;
+    }
+
+    public String getInboundNote() {
+        return inboundNote;
+    }
+
+    public void setInboundNote(String inboundNote) {
+        this.inboundNote = inboundNote;
+    }
+
+    public Supplier getSupplierRef() {
+        return supplierRef;
+    }
+
+    public void setSupplierRef(Supplier supplierRef) {
+        this.supplierRef = supplierRef;
+    }
+
+    public String getSupplierName() {
+        return supplierName;
+    }
+
+    public void setSupplierName(String supplierName) {
+        this.supplierName = supplierName;
     }
 
     public String getStatus() {

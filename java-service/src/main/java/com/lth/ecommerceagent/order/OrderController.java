@@ -175,7 +175,7 @@ public class OrderController {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "仅「可发货 / 发货失败」订单可以发货，当前状态：" + order.getStatus());
         }
-        Order saved = orderCompletionService.ship(order, request != null ? request : new ShipRequest(null, null));
+        Order saved = orderCompletionService.ship(order, request != null ? request : new ShipRequest(null, null, null, null));
         return toResponse(saved);
     }
 
@@ -291,6 +291,11 @@ public class OrderController {
                 o.getBuyerNick(),
                 o.getPayment(),
                 o.getPostFee(),
+                o.getShippingFee(),
+                o.getShippingFeeType(),
+                o.getCostPriceSnapshot(),
+                o.getGoodsCostSnapshot(),
+                o.getGrossProfit(),
                 o.getLogisticsCompany(),
                 o.getWaybillNo(),
                 o.getEncrypted(),

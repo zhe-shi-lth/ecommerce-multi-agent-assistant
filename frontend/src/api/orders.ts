@@ -13,9 +13,12 @@ export const markPaid = (id: number) =>
 
 // 发货闭环：仅「可发货(READY_TO_SHIP)」或「发货失败(SHIPPING_FAILED)」可调；
 // 后端回写平台发货 API：成功置 SHIPPED，失败置 SHIPPING_FAILED（保留原因，可重试）。
-// body 携带商家选择的物流信息（logisticsCompany 必选，waybillNo 缺省后端自动生成）。
-export const shipOrder = (id: number, body: { logisticsCompany: string; waybillNo?: string }) =>
-  api.post<Order>(`/orders/${id}/ship`, body, { silent: true });
+// body 携带商家选择的物流信息（logisticsCompany 必选，waybillNo 缺省后端自动生成），
+// shippingFee 为本次「卖家 -> 买家」实际发货运费（与采购单进货运费严格区分）。
+export const shipOrder = (
+  id: number,
+  body: { logisticsCompany: string; waybillNo?: string; shippingFee?: number | null; shippingFeeType?: string }
+) => api.post<Order>(`/orders/${id}/ship`, body, { silent: true });
 
 // 人工审核决议：对「需人工审核(NEEDS_REVIEW)」订单通过 / 驳回。
 export const reviewOrder = (id: number, decision: "APPROVE" | "REJECT") =>

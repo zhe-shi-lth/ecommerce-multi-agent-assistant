@@ -11,6 +11,7 @@ import type { DailySales, InsufficientStockSummary, Inventory, InventoryWarning,
 import { PLATFORMS, platformLabel, platformMatches } from "../platforms";
 import LineChart from "../components/LineChart";
 import PageHeader from "../components/PageHeader";
+import { errMsg } from "../utils/errMsg";
 
 type Metric = "revenue" | "units";
 
@@ -69,7 +70,7 @@ export default function Dashboard() {
         setProducts(ps2);
         setInsufficient(ins);
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(errMsg(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -97,7 +98,7 @@ export default function Dashboard() {
     setWarnError(null);
     getInventoryWarnings()
       .then(setWarnings)
-      .catch((e) => setWarnError(String(e)))
+      .catch((e) => setWarnError(errMsg(e)))
       .finally(() => setWarnLoading(false));
   }, []);
 
@@ -118,12 +119,12 @@ export default function Dashboard() {
             (failed.length > 0 ? `（${failed.length} 条落库失败）` : "")
         );
       } else if (failed.length > 0) {
-        setRestockMsg(`生成失败：${failed.length} 条落库异常，请检查后端与 Java 服务。`);
+        setRestockMsg(`已生成补货清单，但其中 ${failed.length} 条保存失败，请稍后重试或联系管理员。`);
       } else {
         setRestockMsg("当前预警商品无需补货（已按安全库存覆盖），未生成清单。");
       }
     } catch (e) {
-      setRestockMsg(`生成失败：${String(e)}`);
+      setRestockMsg(`生成失败：${errMsg(e)}`);
     } finally {
       setGenerating(false);
     }
@@ -146,7 +147,7 @@ export default function Dashboard() {
         `已为「${productName(productId)}」刷新状态：共 ${res.total} 笔（${parts.join("，") || "无变化"}）`
       );
     } catch (e) {
-      setRestockMsg(`刷新失败：${String(e)}`);
+      setRestockMsg(`刷新失败：${errMsg(e)}`);
     } finally {
       setRestockingId(null);
     }
@@ -187,7 +188,7 @@ export default function Dashboard() {
         加载中…
       </div>
     );
-  if (error) return <div className="notice notice-error">加载失败：{error}</div>;
+  if (error) return <div className="notice notice-error">{error}</div>;
 
   return (
     <section>

@@ -68,7 +68,9 @@ public class Order {
     private String pendingReason;
 
     // 最近一次履约 Agent 重算的履约结论快照（JSONB；地址补全等场景回写）。
-    @Column(name = "fulfillment_plan_json", columnDefinition = "JSONB")
+    // 用 @JdbcTypeCode(SqlTypes.JSON) 而非 columnDefinition="JSONB"，保证多库可移植：
+    // PostgreSQL 下映射 jsonb（与 Flyway 迁移一致），H2 测试库下映射 json。
+    @Column(name = "fulfillment_plan_json")
     @JdbcTypeCode(SqlTypes.JSON)
     private Map<String, Object> fulfillmentPlanJson;
 
@@ -95,12 +97,37 @@ public class Order {
     @Column(name = "buyer_nick", length = 80)
     private String buyerNick;
 
+    // ===== 金额口径契约（接真实平台 API 前必须统一，见 grossProfit 计算处）=====
+    // payment      = 买家总支付金额（含邮费），即 buyerPaidAmount。毛利公式以此为准。
+    // postFee      = 买家支付的邮费（buyerShippingFee），仅用于展示/对账，不计入毛利（已含在 payment 中）。
+    //               若某平台把 payment 拆成「商品实付 + 邮费」两份返回，则毛利公式需改为
+    //               payment + postFee - 商品成本 - 发货运费；接平台时在此统一，不要各自假设。
+    // shippingFee  = 商家实际支付的发货运费（sellerShippingFee），毛利扣减项；与采购单进货运费严格区分。
+
     // 金额（对齐平台 payment / post_fee）
     @Column(name = "payment", nullable = false)
     private java.math.BigDecimal payment = java.math.BigDecimal.ZERO;
 
     @Column(name = "post_fee", nullable = false)
     private java.math.BigDecimal postFee = java.math.BigDecimal.ZERO;
+
+    // 发货运费（卖家 -> 买家 的实际运费，发货时必填手填；与采购单进货运费严格区分）
+    @Column(name = "shipping_fee", precision = 12, scale = 2)
+    private java.math.BigDecimal shippingFee;
+
+    // 发货运费来源：MANUAL(手填) / TEMPLATE(模板预估，后续扩展)
+    @Column(name = "shipping_fee_type", length = 20)
+    private String shippingFeeType;
+
+    // 成本/毛利快照（发货成功时写入，避免后续商品成本价变动导致历史利润漂移）
+    @Column(name = "cost_price_snapshot", precision = 12, scale = 2)
+    private java.math.BigDecimal costPriceSnapshot;
+
+    @Column(name = "goods_cost_snapshot", precision = 14, scale = 2)
+    private java.math.BigDecimal goodsCostSnapshot;
+
+    @Column(name = "gross_profit", precision = 14, scale = 2)
+    private java.math.BigDecimal grossProfit;
 
     // 物流（已发货订单才有）
     @Column(name = "logistics_company", length = 60)
@@ -321,6 +348,46 @@ public class Order {
 
     public void setPostFee(java.math.BigDecimal postFee) {
         this.postFee = postFee;
+    }
+
+    public java.math.BigDecimal getShippingFee() {
+        return shippingFee;
+    }
+
+    public void setShippingFee(java.math.BigDecimal shippingFee) {
+        this.shippingFee = shippingFee;
+    }
+
+    public String getShippingFeeType() {
+        return shippingFeeType;
+    }
+
+    public void setShippingFeeType(String shippingFeeType) {
+        this.shippingFeeType = shippingFeeType;
+    }
+
+    public java.math.BigDecimal getCostPriceSnapshot() {
+        return costPriceSnapshot;
+    }
+
+    public void setCostPriceSnapshot(java.math.BigDecimal costPriceSnapshot) {
+        this.costPriceSnapshot = costPriceSnapshot;
+    }
+
+    public java.math.BigDecimal getGoodsCostSnapshot() {
+        return goodsCostSnapshot;
+    }
+
+    public void setGoodsCostSnapshot(java.math.BigDecimal goodsCostSnapshot) {
+        this.goodsCostSnapshot = goodsCostSnapshot;
+    }
+
+    public java.math.BigDecimal getGrossProfit() {
+        return grossProfit;
+    }
+
+    public void setGrossProfit(java.math.BigDecimal grossProfit) {
+        this.grossProfit = grossProfit;
     }
 
     public String getLogisticsCompany() {

@@ -13,6 +13,8 @@ public record ProductResponse(
         String targetAudience,
         String usageScenario,
         String status,
+        Long supplierId,
+        String supplierName,
         Instant createdAt,
         Instant updatedAt) {
 }

@@ -53,9 +53,9 @@ public class PurchaseController {
         return purchaseService.markInbound(id);
     }
 
-    /** 待入库 → 已入库：增加库存并触发该商品缺货订单重新判定。 */
+    /** 待入库 → 已入库：增加库存并触发该商品缺货订单重新判定；可传实际到货数量与破损备注。 */
     @PostMapping("/{id}/stock-in")
-    public StockInResult stockIn(@PathVariable Long id) {
-        return purchaseService.stockIn(id);
+    public StockInResult stockIn(@PathVariable Long id, @RequestBody(required = false) StockInRequest request) {
+        return purchaseService.stockIn(id, request);
     }
 }

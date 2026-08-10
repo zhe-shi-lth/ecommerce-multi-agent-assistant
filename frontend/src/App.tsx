@@ -8,6 +8,7 @@ import Orders from "./pages/Orders";
 import OrderDetail from "./pages/OrderDetail";
 import Dashboard from "./pages/Dashboard";
 import PurchaseRestock from "./pages/PurchaseRestock";
+import Suppliers from "./pages/Suppliers";
 import NewListing from "./pages/NewListing";
 import Settings from "./pages/Settings";
 import Simulator from "./pages/Simulator";
@@ -117,6 +118,10 @@ export default function App() {
             <Icon name="purchase" />
             采购补货
           </NavLink>
+          <NavLink to="/suppliers" className="nav-link">
+            <Icon name="supplier" />
+            进货商家
+          </NavLink>
           <div className="nav-group">工具</div>
           <NavLink to="/simulator" className="nav-link">
             <Icon name="simulator" />
@@ -160,6 +165,7 @@ export default function App() {
           <Route path="/orders/:id" element={<OrderDetail />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/purchase-restock" element={<PurchaseRestock />} />
+          <Route path="/suppliers" element={<Suppliers />} />
           <Route path="/simulator" element={<Simulator />} />
           <Route path="/settings" element={<Settings />} />
           <Route

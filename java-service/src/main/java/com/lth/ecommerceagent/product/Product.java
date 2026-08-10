@@ -8,9 +8,13 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+
+import com.lth.ecommerceagent.supplier.Supplier;
 
 @Entity
 @Table(name = "products")
@@ -43,6 +47,10 @@ public class Product {
 
     @Column(nullable = false, length = 40)
     private String status;
+
+    @ManyToOne(fetch = jakarta.persistence.FetchType.EAGER)
+    @JoinColumn(name = "supplier_id")
+    private Supplier supplier;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -122,6 +130,14 @@ public class Product {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Supplier getSupplier() {
+        return supplier;
+    }
+
+    public void setSupplier(Supplier supplier) {
+        this.supplier = supplier;
     }
 
     public Instant getCreatedAt() {

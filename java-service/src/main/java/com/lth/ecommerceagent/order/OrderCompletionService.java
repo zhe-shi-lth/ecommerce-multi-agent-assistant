@@ -1,6 +1,7 @@
 package com.lth.ecommerceagent.order;
 
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -271,6 +272,18 @@ public class OrderCompletionService {
      */
     @Transactional
     public Order ship(Order order, ShipRequest request) {
+        // 发货运费校验：必填（包邮填 0，避免利润出现空值）；不能为负；来源类型仅允许 MANUAL / TEMPLATE。
+        // 否则 API 直调可传异常值，或留下「类型为 MANUAL 但金额为空」的歧义数据。
+        if (request.shippingFee() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "发货运费必填（包邮请填 0）");
+        }
+        if (request.shippingFee().compareTo(java.math.BigDecimal.ZERO) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "发货运费不能为负");
+        }
+        if (request.shippingFeeType() != null
+                && !Set.of("MANUAL", "TEMPLATE").contains(request.shippingFeeType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "发货运费来源只能是 MANUAL 或 TEMPLATE");
+        }
         String logistics = (request.logisticsCompany() != null && !request.logisticsCompany().isBlank())
                 ? request.logisticsCompany()
                 : pickLogistics();
@@ -291,6 +304,21 @@ public class OrderCompletionService {
             // 受理成功：写回物流与发货时间，翻成已发货。
             order.setLogisticsCompany(logistics);
             order.setWaybillNo(waybill);
+            // 发货运费（卖家 -> 买家）：发货时手填，用于后续订单毛利核算。
+            order.setShippingFee(request.shippingFee());
+            order.setShippingFeeType(request.shippingFeeType() != null ? request.shippingFeeType() : "MANUAL");
+            // 成本/毛利快照（历史不漂）：以发货时商品当前成本价为准固化，后续商品成本变动不影响本单毛利。
+            // 毛利口径契约（接平台前必须统一）：grossProfit = payment(买家总支付,含邮费) − goodsCost − shippingFee(商家实际运费)。
+            // 若平台把 payment 拆成「商品实付 + postFee」，则此处需改成 payment + postFee − goodsCost − shippingFee。
+            java.math.BigDecimal snapshotCost = order.getProduct().getCostPrice();
+            java.math.BigDecimal goodsCost = snapshotCost
+                    .multiply(java.math.BigDecimal.valueOf(order.getQuantity()))
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+            java.math.BigDecimal fee = order.getShippingFee() != null ? order.getShippingFee() : java.math.BigDecimal.ZERO;
+            java.math.BigDecimal profit = order.getPayment().subtract(goodsCost).subtract(fee).setScale(2, java.math.RoundingMode.HALF_UP);
+            order.setCostPriceSnapshot(snapshotCost);
+            order.setGoodsCostSnapshot(goodsCost);
+            order.setGrossProfit(profit);
             order.setStatus("SHIPPED");
             order.setFulfillmentSuggestionStatus("SHIPPED");
             order.setPendingReason(null);

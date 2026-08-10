@@ -10,3 +10,18 @@ spring:
     hibernate:
       ddl-auto: create-drop
     open-in-view: false
+
+# 测试用 JWT 密钥（仅测试上下文生效；SHA-256 派生，任意长度均可）。
+# 避免依赖运行期环境变量，保证 @SpringBootTest 能正常起安全相关 Bean。
+jwt:
+  secret: test-jwt-secret-for-spring-boot-test-context-only
+
+# 测试用服务间调用密钥（仅测试上下文生效），保证 SecurityConfig 等 Bean 可正常创建。
+service:
+  api-key: test-service-api-key-for-spring-boot-test-context-only
+
+# 测试用 Python Agent 地址（仅测试上下文生效）；PythonAgentClient 在多数测试里被 @MockBean 替换，
+# 但默认 @SpringBootTest（如应用启动自检测试）会创建真实 Bean，需此占位符。
+python:
+  agent:
+    base-url: http://localhost:8000

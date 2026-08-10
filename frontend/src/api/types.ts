@@ -55,6 +55,8 @@ export interface Product {
   targetAudience: string | null;
   usageScenario: string | null;
   status: string;
+  supplierId?: number | null;
+  supplierName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -96,6 +98,11 @@ export interface Order {
   buyerNick?: string | null;
   payment?: number | string | null;
   postFee?: number | string | null;
+  shippingFee?: number | string | null; // 发货运费（卖家 -> 买家，发货时手填）
+  shippingFeeType?: string | null; // MANUAL / TEMPLATE
+  costPriceSnapshot?: number | string | null; // 发货时商品成本价快照
+  goodsCostSnapshot?: number | string | null; // 商品成本合计快照
+  grossProfit?: number | string | null; // 预估毛利快照（发货成功时写入，历史不漂）
   logisticsCompany?: string | null;
   waybillNo?: string | null;
   encrypted?: boolean | null;
@@ -151,14 +158,50 @@ export interface PurchaseOrder {
   id: number;
   productId: number;
   quantity: number;
-  supplier?: string | null;
+  supplierId?: number | null;
+  supplierName?: string | null;
   status: string; // CREATED / ORDERED / INBOUND / STOCKED
   note?: string | null;
+  // 成本核算字段（成本闭环）
+  unitCost?: number | string | null; // 进货单价
+  productAmount?: number | string | null; // 商品金额 = unitCost * quantity
+  purchaseShippingFee?: number | string | null; // 进货运费（供应商 -> 仓库）
+  totalCost?: number | string | null; // 总成本 = productAmount + purchaseShippingFee
+  landedUnitCost?: number | string | null; // 单件综合成本 = totalCost / actualQuantity
+  expectedArrivalAt?: string | null; // 预计到货时间
+  actualQuantity?: number | null; // 实际入库数量（默认 = quantity）
+  inboundNote?: string | null; // 入库备注（破损/少发说明）
   orderedAt?: string | null;
   inboundAt?: string | null;
   stockedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// 进货商家档案（主数据）
+export interface Supplier {
+  id: number;
+  name: string;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  address?: string | null;
+  settlementType?: "MONTHLY" | "CASH" | "PREPAID" | null;
+  leadTimeDays: number;
+  status: "ACTIVE" | "DISABLED";
+  remark?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupplierInput {
+  name: string;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  address?: string | null;
+  settlementType?: "MONTHLY" | "CASH" | "PREPAID" | null;
+  leadTimeDays?: number;
+  status?: "ACTIVE" | "DISABLED";
+  remark?: string | null;
 }
 
 // 入库结果：本采购单 + 入库后触发的缺货订单重判统计

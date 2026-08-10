@@ -6,8 +6,15 @@ export const getPurchaseOrders = (status?: string) =>
   api.get<PurchaseOrder[]>(`/purchase-orders${status ? `?status=${encodeURIComponent(status)}` : ""}`);
 
 // 由「待确认补货建议」确认生成采购单（初始态 CREATED=待采购）。
-export const createPurchaseOrder = (body: { productId: number; quantity: number; supplier?: string; note?: string }) =>
-  api.post<PurchaseOrder>("/purchase-orders", body, { silent: true });
+export const createPurchaseOrder = (body: {
+  productId: number;
+  quantity: number;
+  supplierId?: number | null;
+  unitCost?: number | null;
+  purchaseShippingFee?: number | null;
+  expectedArrivalAt?: string | null;
+  note?: string;
+}) => api.post<PurchaseOrder>("/purchase-orders", body, { silent: true });
 
 // 待采购 → 已下单
 export const markOrdered = (id: number) =>
@@ -18,5 +25,6 @@ export const markInbound = (id: number) =>
   api.post<PurchaseOrder>(`/purchase-orders/${id}/mark-inbound`, {}, { silent: true });
 
 // 待入库 → 已入库：增加库存并触发该商品缺货订单重新判定，返回重判统计。
-export const stockIn = (id: number) =>
-  api.post<StockInResult>(`/purchase-orders/${id}/stock-in`, {}, { silent: true });
+// body 可传实际入库数量与实际到货备注（支持「买 100 到 98」）。
+export const stockIn = (id: number, body?: { actualQuantity?: number; note?: string }) =>
+  api.post<StockInResult>(`/purchase-orders/${id}/stock-in`, body ?? {}, { silent: true });

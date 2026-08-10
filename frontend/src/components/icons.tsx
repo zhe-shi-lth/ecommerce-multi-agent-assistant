@@ -26,7 +26,10 @@ export type IconName =
   | "chevron-right"
   | "close"
   | "star"
-  | "sparkles";
+  | "sparkles"
+  | "back"
+  | "supplier"
+  | "edit";
 
 const PATHS: Record<IconName, JSX.Element> = {
   new: (
@@ -161,6 +164,25 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4z" />
       <path d="M19 14l.9 2.3L22 17l-2.1.7L19 20l-.9-2.3L16 17l2.1-.7z" />
+    </>
+  ),
+  back: (
+    <>
+      <path d="M19 12H5" />
+      <path d="M11 6l-6 6 6 6" />
+    </>
+  ),
+  supplier: (
+    <>
+      <path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" />
+      <path d="M3 7l9 4 9-4" />
+      <path d="M12 11v10" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M4 20h4l10-10-4-4L4 16v4z" />
+      <path d="M13.5 6.5l4 4" />
     </>
   ),
 };

@@ -6,6 +6,7 @@ import type { Order, Product } from "../api/types";
 import { platformLabel } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import { Icon } from "../components/icons";
+import { errMsg } from "../utils/errMsg";
 
 // 订单状态 → 中文标签 + 配色（与列表页一致）
 const STATUS_META: Record<string, { label: string; tone: "ok" | "warn" | "bad" | "neutral" }> = {
@@ -75,6 +76,7 @@ export default function OrderDetail() {
   const [shippingOpen, setShippingOpen] = useState(false);
   const [shipLogistics, setShipLogistics] = useState<string>(LOGISTICS_COMPANIES[0]);
   const [shipWaybill, setShipWaybill] = useState<string>("");
+  const [shipFee, setShipFee] = useState<string>("");
 
   useEffect(() => {
     Promise.all([getOrder(orderId), getProducts()])
@@ -82,7 +84,7 @@ export default function OrderDetail() {
         setOrder(o);
         setProducts(ps);
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(errMsg(e)))
       .finally(() => setLoading(false));
   }, [orderId]);
 
@@ -124,7 +126,7 @@ export default function OrderDetail() {
     navigator.clipboard
       .writeText(text)
       .then(() => setFeedback({ msg: `${label}已复制到剪贴板`, tone: "ok" }))
-      .catch(() => setFeedback({ msg: `复制失败，请手动复制：${text}`, tone: "error" }));
+      .catch(() => setFeedback({ msg: `「${label}」复制失败，请长按文本手动复制`, tone: "error" }));
   };
 
   const handleConfirmAddress = () =>
@@ -133,8 +135,20 @@ export default function OrderDetail() {
     withFeedback(markPaid(order!.id), (u) => `平台已确认已付款，状态：${statusMeta(u.status).label}`);
   const handleShip = () => setShippingOpen(true);
   const submitShip = () => {
+    // 发货运费必填（包邮填 0），避免利润出现空值。
+    if (shipFee.trim() === "") {
+      setShippingOpen(true);
+      setFeedback({ msg: "请填写实际发货运费（包邮请填 0）", tone: "error" });
+      return;
+    }
     setShippingOpen(false);
-    const body = { logisticsCompany: shipLogistics, waybillNo: shipWaybill.trim() };
+    const fee = Number(shipFee);
+    const body = {
+      logisticsCompany: shipLogistics,
+      waybillNo: shipWaybill.trim(),
+      shippingFee: fee,
+      shippingFeeType: "MANUAL",
+    };
     withFeedback(shipOrder(order!.id, body), (u) =>
       u.status === "SHIPPING_FAILED"
         ? `发货失败：${u.pendingReason || "平台未受理，请重试"}`
@@ -165,7 +179,7 @@ export default function OrderDetail() {
         加载中…
       </div>
     );
-  if (error) return <div className="notice notice-error">加载失败：{error}</div>;
+  if (error) return <div className="notice notice-error">{error}</div>;
   if (!order) return <div className="notice">未找到订单 {orderId}</div>;
 
   const meta = statusMeta(order.status);
@@ -207,7 +221,7 @@ export default function OrderDetail() {
         icon={<Icon name="orders" />}
         actions={
           <button className="btn btn-secondary" onClick={() => navigate("/orders")}>
-            <Icon name="logout" /> 返回列表
+            <Icon name="back" /> 返回列表
           </button>
         }
       />
@@ -337,6 +351,17 @@ export default function OrderDetail() {
                 value={shipWaybill}
                 onChange={(e) => setShipWaybill(e.target.value)}
               />
+              <span style={{ fontSize: 13, color: "#5b5f6b" }}>实际发货运费（必填，包邮填 0）</span>
+              <input
+                className="filter-input"
+                style={{ width: 130 }}
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="0.00"
+                value={shipFee}
+                onChange={(e) => setShipFee(e.target.value)}
+              />
               <button className="btn btn-primary btn-sm" onClick={submitShip} disabled={busy}>
                 {busy ? <span className="spinner" /> : <Icon name="check" />}
                 确认发货
@@ -437,7 +462,8 @@ export default function OrderDetail() {
             {item("商品", productName)}
             {item("数量", order.quantity)}
             {item("实付金额", money(order.payment))}
-            {item("邮费", money(order.postFee))}
+            {item("买家支付邮费", money(order.postFee))}
+            {item("卖家发货运费", money(order.shippingFee))}
             {item("物流公司", order.logisticsCompany || "尚未发货")}
             {item("运单号", order.waybillNo || "—")}
             {item("发货时间", order.shippedAt ? fmt(String(order.shippedAt)) : "—")}
@@ -445,6 +471,63 @@ export default function OrderDetail() {
             {item("更新时间", fmt(String(order.updatedAt)))}
           </div>
         </div>
+      </div>
+
+      {/* 预估毛利（成本闭环）：实付金额 - 商品成本 - 实际发货运费。
+          口径：payment 为买家实付（与 postFee 分开计），故毛利 = payment - 成本 - 发货运费。 */}
+      <div className="card">
+        <div className="card-header">
+          <h3>预估毛利</h3>
+        </div>
+        {(() => {
+          const product = products.find((p) => p.id === order.productId);
+          const qty = order.quantity || 0;
+          const payment = order.payment != null ? Number(order.payment) : 0;
+          const shippingFee = order.shippingFee != null ? Number(order.shippingFee) : 0;
+          // 已发货订单优先用发货时快照（历史不漂）；未发货仍按当前成本实时算。
+          const hasSnapshot =
+            order.grossProfit != null && order.grossProfit !== "";
+          const costPrice = hasSnapshot
+            ? Number(order.costPriceSnapshot)
+            : product?.costPrice != null
+            ? Number(product.costPrice)
+            : 0;
+          const goodsCost = hasSnapshot
+            ? Number(order.goodsCostSnapshot)
+            : costPrice * qty;
+          const grossProfit = hasSnapshot ? Number(order.grossProfit) : payment - goodsCost - shippingFee;
+          const profitTone = grossProfit >= 0 ? "#2fa86a" : "#e5484d";
+          return (
+            <div className="review-highlight" style={{ marginBottom: 0, border: "none", boxShadow: "none", padding: 0 }}>
+              <div className="review-grid">
+                {item(hasSnapshot ? "发货时成本单价(快照)" : "商品成本单价", money(costPrice))}
+                {item("数量", qty)}
+                {item("商品成本合计", money(goodsCost))}
+                {item("卖家发货运费", money(shippingFee))}
+                {item("实付金额", money(payment))}
+                {item("买家支付邮费", money(order.postFee))}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 12,
+                  marginTop: 14,
+                  paddingTop: 14,
+                  borderTop: "1px solid #ececf0",
+                }}
+              >
+                <span style={{ fontSize: 13, color: "#5b5f6b" }}>预估毛利</span>
+                <strong style={{ fontSize: 22, color: profitTone }}>
+                  {money(grossProfit)}
+                </strong>
+                <span className="mini neutral" style={{ marginLeft: "auto" }}>
+                  {hasSnapshot ? "发货时快照（历史成本变动不影响）" : "公式：实付金额 − 商品成本 − 发货运费"}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </section>
   );

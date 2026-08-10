@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import {
   getProducts,
   createProduct,
+  updateProduct,
   type CreateProductInput,
 } from "../api/products";
 import { getCategories, createCategory } from "../api/categories";
-import type { Product, Category } from "../api/types";
+import { getSuppliers } from "../api/suppliers";
+import type { Product, Category, Supplier } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
@@ -24,6 +26,7 @@ const EMPTY_FORM: CreateProductInput = {
 export default function Products() {
   const [rows, setRows] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -32,14 +35,16 @@ export default function Products() {
   const [catName, setCatName] = useState("");
 
   const [showProductForm, setShowProductForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<CreateProductInput>(EMPTY_FORM);
 
   function refreshAll() {
     setLoading(true);
-    Promise.all([getProducts(), getCategories()])
-      .then(([ps, cs]) => {
+    Promise.all([getProducts(), getCategories(), getSuppliers()])
+      .then(([ps, cs, ss]) => {
         setRows(ps);
         setCategories(cs);
+        setSuppliers(ss);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -65,8 +70,13 @@ export default function Products() {
   async function handleAddProduct() {
     setBusy(true);
     try {
-      await createProduct(form);
+      if (editingId != null) {
+        await updateProduct(editingId, form);
+      } else {
+        await createProduct(form);
+      }
       setForm(EMPTY_FORM);
+      setEditingId(null);
       setShowProductForm(false);
       setRows(await getProducts());
     } catch (e) {
@@ -78,6 +88,23 @@ export default function Products() {
 
   function setField(key: keyof CreateProductInput, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // 打开编辑：用商品当前值预填表单（含进货商家），保存时走 PUT。
+  function openEdit(p: Product) {
+    setEditingId(p.id);
+    setForm({
+      name: p.name,
+      category: p.category,
+      description: p.description,
+      costPrice: p.costPrice,
+      salePrice: p.salePrice,
+      targetAudience: p.targetAudience ?? "",
+      usageScenario: p.usageScenario ?? "",
+      status: p.status,
+      supplierId: p.supplierId ?? null,
+    });
+    setShowProductForm(true);
   }
 
   return (
@@ -126,7 +153,10 @@ export default function Products() {
             <div className="card-header">
               <h3>商品</h3>
             {!showProductForm && (
-              <button className="btn btn-primary btn-sm" onClick={() => setShowProductForm(true)}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setShowProductForm(true); }}
+              >
                 新建商品
               </button>
             )}
@@ -159,10 +189,14 @@ export default function Products() {
                     </div>
                     <div className="prod-card-meta">
                       <span>类目：{p.category}</span>
+                      <span>进货商家：{p.supplierName ?? "未设置"}</span>
                       {p.targetAudience && <span>目标：{p.targetAudience}</span>}
                       {p.usageScenario && <span className="muted">场景：{p.usageScenario}</span>}
                     </div>
                     <div className="prod-card-actions">
+                      <button className="btn btn-secondary btn-sm" onClick={() => openEdit(p)}>
+                        编辑
+                      </button>
                       {p.status === "PUBLISHED" ? (
                         <span className="ci-meta">已发布</span>
                       ) : (
@@ -220,7 +254,7 @@ export default function Products() {
           onClick={() => { setShowProductForm(false); setForm(EMPTY_FORM); }}
         >
           <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">新建商品</div>
+            <div className="modal-title">{editingId != null ? "编辑商品" : "新建商品"}</div>
             <div className="modal-body">
               <div className="listing-form" style={{ marginTop: 0 }}>
                 <div className="field">
@@ -234,6 +268,25 @@ export default function Products() {
                     {categories.map((c) => (
                       <option key={c.id} value={c.name}>
                         {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <span>进货商家</span>
+                  <select
+                    value={form.supplierId ?? ""}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        supplierId: e.target.value ? Number(e.target.value) : null,
+                      }))
+                    }
+                  >
+                    <option value="">不指定（可在补货时再选）</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
                       </option>
                     ))}
                   </select>
@@ -265,7 +318,7 @@ export default function Products() {
             <div className="modal-actions">
               <button
                 className="btn btn-secondary"
-                onClick={() => { setShowProductForm(false); setForm(EMPTY_FORM); }}
+                onClick={() => { setShowProductForm(false); setForm(EMPTY_FORM); setEditingId(null); }}
                 disabled={busy}
               >
                 取消
@@ -275,7 +328,7 @@ export default function Products() {
                 onClick={handleAddProduct}
                 disabled={busy || !form.name || !form.category || !form.description}
               >
-                {busy ? "保存中…" : "保存商品"}
+                {busy ? "保存中…" : editingId != null ? "保存修改" : "保存商品"}
               </button>
             </div>
           </div>
