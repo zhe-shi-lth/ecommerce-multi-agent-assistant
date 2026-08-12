@@ -5,6 +5,10 @@ package com.lth.ecommerceagent.purchase;
  * actualQuantity 为实际入库数量（缺省或 <=0 时回退到采购数量）；note 记录破损/少发说明。
  */
 public record StockInRequest(
+        String receiptNo,
         Integer actualQuantity,
         String note) {
+    public StockInRequest(Integer actualQuantity, String note) {
+        this(null, actualQuantity, note);
+    }
 }

@@ -1,7 +1,5 @@
 package com.lth.ecommerceagent.simulation;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -18,6 +16,7 @@ import com.lth.ecommerceagent.inventory.InventoryRepository;
 import com.lth.ecommerceagent.operation.OperationPlan;
 import com.lth.ecommerceagent.operation.OperationPlanRepository;
 import com.lth.ecommerceagent.order.Order;
+import com.lth.ecommerceagent.order.OrderCompletionService;
 import com.lth.ecommerceagent.order.OrderRepository;
 import com.lth.ecommerceagent.platform.OrderPullCommand;
 import com.lth.ecommerceagent.platform.OrderSource;
@@ -28,14 +27,11 @@ import com.lth.ecommerceagent.product.ProductRepository;
 import com.lth.ecommerceagent.python.PythonAgentClient;
 import com.lth.ecommerceagent.python.PythonAgentException;
 import com.lth.ecommerceagent.python.PythonPlatformStatus;
-import com.lth.ecommerceagent.sales.DailySales;
-import com.lth.ecommerceagent.sales.DailySalesRepository;
 
 /**
  * 模拟从电商平台 API 拉取订单，并全链路联动写入：
  * - orders（逐单生成）
- * - inventories（按累计销量扣减 current_stock + 重算 inventory_status）
- * - daily_sales（按 商品+日期 聚合 upsert，供销售监控趋势曲线）
+ * 同步阶段只落订单事实。仅事实完整的订单尝试预留库存；销量在发货成功时统计。
  *
  * <p>订单从哪来（本地模拟 / 真实平台）由 {@link OrderSource} 抽象收敛：
  * 两种来源只产出<b>事实</b>（是否已付款、地址是否完整、是否需人工复核等），
@@ -51,7 +47,7 @@ public class SimulationService {
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
-    private final DailySalesRepository dailySalesRepository;
+    private final OrderCompletionService orderCompletionService;
     private final OperationPlanRepository operationPlanRepository;
     private final PythonAgentClient pythonAgentClient;
     private final List<OrderSource> orderSources;
@@ -64,14 +60,14 @@ public class SimulationService {
             OrderRepository orderRepository,
             ProductRepository productRepository,
             InventoryRepository inventoryRepository,
-            DailySalesRepository dailySalesRepository,
+            OrderCompletionService orderCompletionService,
             OperationPlanRepository operationPlanRepository,
             PythonAgentClient pythonAgentClient,
             List<OrderSource> orderSources) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.inventoryRepository = inventoryRepository;
-        this.dailySalesRepository = dailySalesRepository;
+        this.orderCompletionService = orderCompletionService;
         this.operationPlanRepository = operationPlanRepository;
         this.pythonAgentClient = pythonAgentClient;
         this.orderSources = orderSources;
@@ -128,19 +124,7 @@ public class SimulationService {
         OrderSource source = resolveSource();
         List<PulledOrder> pulled = source.pull(new OrderPullCommand(targets, days, maxOrdersPerDay, maxQty));
 
-        // 运行库存：按商品从当前库存起逐单扣减，仅当订单量超过剩余库存时才标记「库存不足」，
-        // 不再随机打标，避免出现「明明有货却显示库存不足」的误导。
-        Map<Long, Integer> remaining = new HashMap<>();
-        for (Long pid : productById.keySet()) {
-            inventoryRepository.findByProductId(pid)
-                    .ifPresent(inv -> remaining.put(pid, inv.getCurrentStock()));
-        }
-
         int ordersCreated = 0;
-        // 每商品每平台每日期 汇总：productId -> platform -> (date -> DayAgg)
-        Map<Long, Map<String, Map<LocalDate, DayAgg>>> agg = new HashMap<>();
-        // 每商品累计已履约销量（跨平台汇总，供库存扣减；库存不足订单不计入）
-        Map<Long, Integer> productUnits = new HashMap<>();
 
         for (PulledOrder po : pulled) {
             Product product = productById.get(po.productId());
@@ -149,86 +133,24 @@ public class SimulationService {
                 continue;
             }
             String plat = po.platform();
-            int qty = po.quantity();
-            int rem = remaining.getOrDefault(po.productId(), 0);
-            boolean insufficient = rem <= 0 || qty > rem;
-            String status = deriveStatus(po, insufficient);
+            String status = deriveStatus(po, false);
 
             // 幂等：真实来源重复同步时，平台单号已存在的订单跳过（不重复落库）。
             if (orderRepository.existsByPlatformAndPlatformOrderId(plat, po.platformOrderId())) {
                 continue;
             }
 
-            Order order = toOrder(po, product, status, source.name());
-            orderRepository.save(order);
+            Order order = orderRepository.save(toOrder(po, product, status, source.name()));
             ordersCreated++;
-
-            if (insufficient) {
-                continue; // 未履约：不扣库存、不计入日销与销量汇总
-            }
-            remaining.put(po.productId(), rem - qty);
-            productUnits.merge(po.productId(), qty, Integer::sum);
-
-            LocalDate date = po.orderedOn() != null ? po.orderedOn() : LocalDate.now();
-            DayAgg a = agg.computeIfAbsent(po.productId(), k -> new HashMap<>())
-                    .computeIfAbsent(plat, k -> new HashMap<>())
-                    .computeIfAbsent(date, k -> new DayAgg());
-            a.units += qty;
-            BigDecimal line = (product.getSalePrice() != null)
-                    ? product.getSalePrice().multiply(BigDecimal.valueOf(qty))
-                    : BigDecimal.ZERO;
-            a.revenue = a.revenue.add(line);
-            a.orderCount += 1;
-        }
-
-        // 库存联动：按累计销量扣减并据水位重算状态
-        int inventoriesUpdated = 0;
-        for (Long pid : productUnits.keySet()) {
-            Optional<Inventory> invOpt = inventoryRepository.findByProductId(pid);
-            if (invOpt.isEmpty()) {
-                continue;
-            }
-            int sold = productUnits.get(pid);
-            Inventory inv = invOpt.get();
-            int newStock = Math.max(0, inv.getCurrentStock() - sold);
-            inv.setCurrentStock(newStock);
-            inv.setInventoryStatus(recomputeStatus(newStock, inv.getSafeStockThreshold()));
-            inventoryRepository.save(inv);
-            inventoriesUpdated++;
-        }
-
-        // 日销 upsert（find-then-save 满足唯一约束 product_id + platform + sale_date）
-        int dailySalesUpserted = 0;
-        for (Long pid : agg.keySet()) {
-            for (Map.Entry<String, Map<LocalDate, DayAgg>> pe : agg.get(pid).entrySet()) {
-                String plat = pe.getKey();
-                for (Map.Entry<LocalDate, DayAgg> e : pe.getValue().entrySet()) {
-                    LocalDate date = e.getKey();
-                    DayAgg a = e.getValue();
-                    Optional<DailySales> existing =
-                            dailySalesRepository.findByProductIdAndPlatformAndSaleDate(pid, plat, date);
-                    DailySales ds;
-                    if (existing.isPresent()) {
-                        ds = existing.get();
-                        ds.setRevenue(ds.getRevenue().add(a.revenue));
-                        ds.setUnits(ds.getUnits() + a.units);
-                        ds.setOrderCount(ds.getOrderCount() + a.orderCount);
-                    } else {
-                        ds = new DailySales();
-                        ds.setProductId(pid);
-                        ds.setPlatform(plat);
-                        ds.setSaleDate(date);
-                        ds.setRevenue(a.revenue);
-                        ds.setUnits(a.units);
-                        ds.setOrderCount(a.orderCount);
-                    }
-                    dailySalesRepository.save(ds);
-                    dailySalesUpserted++;
+            if ("READY_TO_SHIP".equals(status)) {
+                try {
+                    orderCompletionService.reserveImportedOrder(order);
+                } catch (org.springframework.web.server.ResponseStatusException e) {
+                    // 同步不能因单笔缺货整体失败；该订单被服务收敛为库存不足。
                 }
             }
         }
-
-        return new SimulationResult(ordersCreated, inventoriesUpdated, dailySalesUpserted);
+        return new SimulationResult(ordersCreated, 0, 0);
     }
 
     /** 当前订单数据来源信息（mock/real + 已对接平台列表）。 */
@@ -307,19 +229,4 @@ public class SimulationService {
         return order;
     }
 
-    private String recomputeStatus(int currentStock, int safeThreshold) {
-        if (currentStock < safeThreshold) {
-            return "RISK";
-        }
-        if (currentStock < safeThreshold * 2) {
-            return "LOW";
-        }
-        return "ENOUGH";
-    }
-
-    private static final class DayAgg {
-        int units = 0;
-        int orderCount = 0;
-        BigDecimal revenue = BigDecimal.ZERO;
-    }
 }

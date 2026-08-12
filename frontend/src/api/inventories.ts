@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { Inventory } from "./types";
+import type { Inventory, InventoryMovement } from "./types";
 
 export const getInventories = () => api.get<Inventory[]>("/inventories");
 
@@ -28,3 +28,9 @@ export interface UpdateInventoryInput {
 
 export const updateInventory = (id: number, input: UpdateInventoryInput) =>
   api.put<Inventory>(`/inventories/${id}`, input);
+
+export const adjustInventory = (id: number, newCurrentStock: number, reason: string) =>
+  api.post<Inventory>(`/inventories/${id}/adjust`, { newCurrentStock, reason });
+
+export const getInventoryMovements = (id: number) =>
+  api.get<InventoryMovement[]>(`/inventories/${id}/movements`);

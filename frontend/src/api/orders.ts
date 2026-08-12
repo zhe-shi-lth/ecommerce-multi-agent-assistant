@@ -40,3 +40,6 @@ export const recheckAllOrders = () =>
 // 单商品「重新判定」（销售监控「库存不足订单」对应位置按钮）：补货完成后重算该商品库存不足订单状态，不改动库存。
 export const recheckProductOrders = (productId: number) =>
   api.post<RecheckAllResult>(`/orders/recheck/${productId}`, {}, { silent: true });
+
+export const cancelOrder = (id: number, reason: string) =>
+  api.post<Order>(`/orders/${id}/cancel`, { reason }, { silent: true });

@@ -21,7 +21,7 @@ import AlertModal from "./components/AlertModal";
 import { Icon } from "./components/icons";
 
 export default function App() {
-  const authed = isAuthed();
+  const [authed, setAuthed] = useState(isAuthed());
   const loc = useLocation();
   // 启动校验：本地有 token 时先向后端 /auth/me 验真，期间显示加载态，避免闪现主页；
   // 验真失败（过期/无效）清 token 回登录页。无 token 则无需校验，直接走登录路由。
@@ -38,11 +38,13 @@ export default function App() {
       .then((me) => {
         if (cancelled) return;
         if (me.role) setRole(me.role); // 同步最新角色（防本地 role 与令牌不一致）
+        setAuthed(true);
         setChecking(false);
       })
       .catch(() => {
         if (cancelled) return;
         clearToken();
+        setAuthed(false);
         setChecking(false);
       });
     return () => {

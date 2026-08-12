@@ -1,4 +1,5 @@
 from app.llm import client as llm_client
+from app.errors import ConfigError
 from app.schemas.agent_outputs import ContentBrief, ProductPlan
 from app.schemas.product import ProductContext
 
@@ -48,10 +49,7 @@ class ProductPlanningAgent:
         platforms = _resolve_platforms(selected_platforms)
         client = llm_client.get_llm_client()
         if client is None:
-            # 离线/规则模式：显式走确定性规则实现（非隐式降级）。
-            return self._rule_based_run(
-                product, knowledge, platforms, notes, content_brief, copy_requirements
-            )
+            raise ConfigError("未配置可用的文本大模型，无法生成商品文案，请先到设置中心配置")
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -95,7 +93,9 @@ class ProductPlanningAgent:
                 continue
             # 模糊匹配：规范键是 LLM 键的子串（timaobao 含 taobao）
             hit = next((v for k, v in raw.items() if p in k.lower()), None)
-            result[p] = hit or f"{product.name}（{_PLATFORM_LABELS.get(p, p)} 文案待补充）"
+            if not hit:
+                raise ConfigError(f"模型未返回{_PLATFORM_LABELS.get(p, p)}平台文案，请重新生成")
+            result[p] = hit
         return result
 
     def _rule_based_run(

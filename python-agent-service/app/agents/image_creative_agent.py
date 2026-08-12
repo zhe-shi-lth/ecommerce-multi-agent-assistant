@@ -60,9 +60,7 @@ class ImageCreativeAgent:
     ) -> ImagePlan:
         client = llm_client.get_llm_client()
         if client is None:
-            return self._rule_based_run(
-                product, knowledge, notes, reference_image, content_brief, image_requirements
-            )
+            raise ConfigError("未配置可用的文本大模型，无法生成图片创意与提示词，请先到设置中心配置")
         user_prompt = (
             "商品上下文（JSON）：\n"
             f"{product.model_dump_json(indent=2)}\n\n"
@@ -235,7 +233,9 @@ class ImageCreativeAgent:
             prompt = self._build_copy_prompt(product, notes, image_plan, platforms)
             main_url = self._generate_one(generator.generate_image, prompt)
         # 同步 main_image_prompt 为实际用于生成的文案提示词，保证展示与生成一致
-        return image_plan.model_copy(update={"main_image_url": main_url, "main_image_prompt": prompt})
+        from app.media_store import persist_media
+        stored_url = persist_media(main_url, "image")
+        return image_plan.model_copy(update={"main_image_url": stored_url, "main_image_prompt": prompt})
 
     @staticmethod
     def _generate_one(callable_fn, *args, retries: int = 1) -> str | None:

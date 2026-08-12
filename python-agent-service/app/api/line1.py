@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.agents.image_creative_agent import ImageCreativeAgent
 from app.agents.product_planning_agent import ProductPlanningAgent
+from app.errors import ConfigError
 from app.llm import client as llm_client
 from app.rag.service import get_knowledge_service
 from app.schemas.agent_outputs import ContentBrief, ImagePlan, ProductPlan
@@ -62,6 +63,8 @@ class Line1FinalizeRequest(BaseModel):
     content_brief: ContentBrief | None = None
     product_plan: ProductPlan
     image_plan: ImagePlan
+    video_url: str | None = None
+    finalize_token: str | None = None
 
 
 def _product_context_from_java(product_id: int) -> ProductContext | None:
@@ -82,25 +85,6 @@ def _product_context_from_java(product_id: int) -> ProductContext | None:
     )
 
 
-def _rule_content_brief(product: ProductContext, merchant_brief: str) -> ContentBrief:
-    audience = product.target_audience or "目标用户"
-    scenario = product.usage_scenario or "日常使用场景"
-    return ContentBrief(
-        target_audience=audience,
-        core_selling_points=[
-            f"适合{audience}",
-            f"覆盖{scenario}",
-            f"突出{product.category}类目的实用价值",
-        ],
-        tone="真实、具体、不过度营销",
-        visual_direction=f"围绕{scenario}做自然光生活方式画面，清楚展示{product.name}",
-        video_direction=f"用短视频先呈现{scenario}痛点，再展示{product.name}的核心卖点",
-        copy_direction="用种草式表达说明使用场景、核心卖点和购买理由",
-        compliance_notes=["避免绝对化用语", "不夸大功效", "不使用侵权品牌元素"],
-        merchant_brief=merchant_brief,
-    )
-
-
 @router.post("/line1/content-brief")
 def line1_content_brief(req: Line1ContentBriefRequest) -> ContentBrief:
     product = _product_context_from_java(req.product_id)
@@ -108,7 +92,7 @@ def line1_content_brief(req: Line1ContentBriefRequest) -> ContentBrief:
         raise HTTPException(status_code=404, detail="商品不存在或 Java 服务不可用")
     client = llm_client.get_llm_client()
     if client is None:
-        return _rule_content_brief(product, req.merchant_brief)
+        raise ConfigError("未配置可用的文本大模型，无法生成 Content Brief，请先到设置中心配置")
     system_prompt = (
         "你是电商新品上架策略专家。请根据商品、目标平台和商家通用要求，"
         "生成一份供图片、视频、文案共同使用的 ContentBrief。"
@@ -174,13 +158,19 @@ def line1_finalize(req: Line1FinalizeRequest) -> dict:
     )
     product_plan = req.product_plan.model_copy(update={"content_brief": req.content_brief})
     image_plan = req.image_plan.model_copy(update={"content_brief": req.content_brief})
+    image_plan_data = image_plan.model_dump()
+    if req.video_url:
+        image_plan_data["video_url"] = req.video_url
     op_id = client.persist_line1_plan(
         product_id=req.product_id,
         product_plan=product_plan.model_dump(),
-        image_plan=image_plan.model_dump(),
+        image_plan=image_plan_data,
         final_summary=final_summary,
         platform=req.platform,
+        trace_id=f"line1_{req.finalize_token}" if req.finalize_token else None,
     )
+    if op_id is None:
+        raise HTTPException(status_code=502, detail="运营计划落库失败，请稍后重试；本次生成结果仍保留在页面中")
     return {
         "ok": op_id is not None,
         "productId": req.product_id,

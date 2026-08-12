@@ -34,8 +34,10 @@ export const finalizeListing = (body: {
   content_brief?: Json | null;
   product_plan: Json;
   image_plan: Json;
+  video_url?: string | null;
+  finalize_token: string;
 }) =>
-  agentApi.post<{ ok: boolean; productId: number | null; operationPlanId: number | null }>(
+  agentApi.post<{ ok: true; productId: number; operationPlanId: number }>(
     "/ecommerce/line1/finalize",
     body,
   );

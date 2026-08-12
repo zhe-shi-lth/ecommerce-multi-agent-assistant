@@ -63,9 +63,8 @@ public class ProductController {
 
     @PostMapping("/{id}/publish")
     public ProductResponse publish(@PathVariable Long id) {
-        Product product = findProduct(id);
-        product.setStatus("PUBLISHED");
-        return toResponse(productRepository.save(product));
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                "商品只能通过运营计划的发布前门控和平台发布适配器发布");
     }
 
     private void apply(ProductCreateRequest request, Product product) {
@@ -77,7 +76,10 @@ public class ProductController {
         // 前端建商品无需关心状态/人群/场景，缺省兜底，避免 NOT NULL 约束 500
         product.setTargetAudience(request.getTargetAudience() != null ? request.getTargetAudience() : "");
         product.setUsageScenario(request.getUsageScenario() != null ? request.getUsageScenario() : "");
-        product.setStatus(request.getStatus() != null ? request.getStatus() : "DRAFT");
+        // 商品状态由发布流程维护，通用新增/编辑接口不能绕过发布门控。
+        if (product.getId() == null) {
+            product.setStatus("DRAFT");
+        }
         // supplierId：仅当 JSON 显式传入（含 null）才更新。null = 清空绑定商家；未传则保留原值，
         // 避免编辑其它字段时误清空已绑定商家。
         if (request.isSupplierIdSet()) {

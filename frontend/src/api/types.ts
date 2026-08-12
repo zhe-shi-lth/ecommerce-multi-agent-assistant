@@ -82,6 +82,7 @@ export interface Order {
   platformOrderId?: string;
   quantity: number;
   status: string;
+  reservedQuantity?: number;
   addressComplete: boolean;
   paid: boolean;
   manualReviewRequired: boolean;
@@ -107,8 +108,27 @@ export interface Order {
   waybillNo?: string | null;
   encrypted?: boolean | null;
   shippedAt?: string | null;
+  reverseReason?: string | null;
+  cancelledAt?: string | null;
+  refundedAt?: string | null;
+  returnedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface InventoryMovement {
+  id: number;
+  productId: number;
+  movementType: string;
+  currentDelta: number;
+  reservedDelta: number;
+  currentAfter: number;
+  reservedAfter: number;
+  referenceType?: string | null;
+  referenceId?: number | null;
+  reason: string;
+  operator: string;
+  createdAt: string;
 }
 
 export interface DailySales {
@@ -160,7 +180,7 @@ export interface PurchaseOrder {
   quantity: number;
   supplierId?: number | null;
   supplierName?: string | null;
-  status: string; // CREATED / ORDERED / INBOUND / STOCKED
+  status: string; // PENDING_APPROVAL / REJECTED / CREATED / ORDERED / INBOUND / PARTIALLY_RECEIVED / STOCKED / CANCELLED / CLOSED_SHORT
   note?: string | null;
   // 成本核算字段（成本闭环）
   unitCost?: number | string | null; // 进货单价
@@ -169,7 +189,9 @@ export interface PurchaseOrder {
   totalCost?: number | string | null; // 总成本 = productAmount + purchaseShippingFee
   landedUnitCost?: number | string | null; // 单件综合成本 = totalCost / actualQuantity
   expectedArrivalAt?: string | null; // 预计到货时间
-  actualQuantity?: number | null; // 实际入库数量（默认 = quantity）
+  actualQuantity?: number | null; // 累计实际入库数量
+  receivedQuantity: number;
+  remainingQuantity: number;
   inboundNote?: string | null; // 入库备注（破损/少发说明）
   orderedAt?: string | null;
   inboundAt?: string | null;
@@ -208,4 +230,46 @@ export interface SupplierInput {
 export interface StockInResult {
   purchaseOrder: PurchaseOrder;
   recheck: RecheckAllResult;
+}
+
+export interface PurchaseReceipt {
+  id: number;
+  purchaseOrderId: number;
+  receiptNo: string;
+  quantity: number;
+  note?: string | null;
+  receivedAt: string;
+  operator: string;
+}
+
+export interface ProductListing {
+  id: number;
+  productId: number;
+  operationPlanId?: number | null;
+  platform: "taobao" | "douyin" | "xiaohongshu";
+  status: "PENDING" | "PUBLISHED" | "UNPUBLISHED" | "FAILED";
+  externalItemId?: string | null;
+  externalUrl?: string | null;
+  lastMessage?: string | null;
+  publishedAt?: string | null;
+  unpublishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AfterSalesOrder {
+  id: number;
+  afterSaleNo: string;
+  orderId: number;
+  type: "REFUND_ONLY" | "RETURN_REFUND";
+  status: "PENDING" | "WAITING_RETURN" | "COMPLETED" | "REJECTED";
+  quantity: number;
+  refundAmount: number | string;
+  reason: string;
+  returnDisposition?: "RESTOCK" | "DAMAGED" | null;
+  refundedAt?: string | null;
+  receivedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -60,6 +60,7 @@ export default function OperationPlanDetail() {
 
   const confirmationStatus = plan.confirmationStatus ?? "PENDING";
   const pending = confirmationStatus === "PENDING";
+  const isListingPlan = plan.line === "LINE1_ONBOARDING";
 
   async function handleDecision(kind: "confirm" | "reject") {
     setActing(true);
@@ -122,7 +123,9 @@ export default function OperationPlanDetail() {
 
       <div className="card">
         <div className="export-actions">
-          {pending ? (
+          {!isListingPlan ? (
+            <div className="notice notice-error">该记录不是新品上架计划，不能在这里执行发布审批。</div>
+          ) : pending ? (
             <>
               <button className="btn btn-primary" onClick={() => handleDecision("confirm")} disabled={acting}>
                 {acting ? "处理中…" : "同意并发布"}

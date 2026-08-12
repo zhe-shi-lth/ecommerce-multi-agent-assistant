@@ -7,7 +7,8 @@ import {
 } from "../api/products";
 import { getCategories, createCategory } from "../api/categories";
 import { getSuppliers } from "../api/suppliers";
-import type { Product, Category, Supplier } from "../api/types";
+import { getProductListings } from "../api/listings";
+import type { Product, Category, Supplier, ProductListing } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
@@ -27,6 +28,7 @@ export default function Products() {
   const [rows, setRows] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [listings, setListings] = useState<ProductListing[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -40,11 +42,12 @@ export default function Products() {
 
   function refreshAll() {
     setLoading(true);
-    Promise.all([getProducts(), getCategories(), getSuppliers()])
-      .then(([ps, cs, ss]) => {
+    Promise.all([getProducts(), getCategories(), getSuppliers(), getProductListings()])
+      .then(([ps, cs, ss, ls]) => {
         setRows(ps);
         setCategories(cs);
         setSuppliers(ss);
+        setListings(ls);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -192,6 +195,18 @@ export default function Products() {
                       <span>进货商家：{p.supplierName ?? "未设置"}</span>
                       {p.targetAudience && <span>目标：{p.targetAudience}</span>}
                       {p.usageScenario && <span className="muted">场景：{p.usageScenario}</span>}
+                    </div>
+                    <div className="prod-card-meta">
+                      {(["taobao", "douyin", "xiaohongshu"] as const).map((platform) => {
+                        const listing = listings.find((item) => item.productId === p.id && item.platform === platform);
+                        const label = platform === "taobao" ? "淘宝" : platform === "douyin" ? "抖音" : "小红书";
+                        const published = listing?.status === "PUBLISHED";
+                        return (
+                          <span className={`mini ${published ? "ok" : listing?.status === "FAILED" ? "bad" : "neutral"}`} key={platform} title={listing?.lastMessage ?? undefined}>
+                            {label} · {published ? "已发布" : listing?.status === "FAILED" ? "发布失败" : "未发布"}
+                          </span>
+                        );
+                      })}
                     </div>
                     <div className="prod-card-actions">
                       <button className="btn btn-secondary btn-sm" onClick={() => openEdit(p)}>

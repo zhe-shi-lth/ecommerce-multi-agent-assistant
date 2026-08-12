@@ -43,12 +43,5 @@ def test_operation_plan_api_returns_multi_agent_result():
         },
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["trace_id"].startswith("trace_")
-    assert payload["product_plan"]["recommended_title"]
-    assert payload["image_plan"]["main_image_prompt"]
-    assert payload["inventory_plan"]["should_restock"] is True
-    assert payload["fulfillment_plan"]["can_ship"] is True
-    assert payload["final_summary"]
-    assert payload["manual_review_required"] is False
+    assert response.status_code == 422
+    assert "文本大模型" in response.json()["detail"]

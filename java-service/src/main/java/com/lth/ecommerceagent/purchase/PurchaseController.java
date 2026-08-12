@@ -20,13 +20,13 @@ public class PurchaseController {
         this.purchaseService = purchaseService;
     }
 
-    /** 由「待确认补货建议」确认生成采购单（初始态 CREATED=待采购）。 */
+    /** 发起采购申请（初始态 PENDING_APPROVAL=待审批）。 */
     @PostMapping
     public PurchaseOrderResponse create(@RequestBody CreatePurchaseOrderRequest request) {
         return purchaseService.create(request);
     }
 
-    /** 采购单列表，可按生命周期状态过滤（CREATED/ORDERED/INBOUND/STOCKED）。 */
+    /** 采购单列表，可按生命周期状态过滤（PENDING_APPROVAL/REJECTED/CREATED/ORDERED/INBOUND/STOCKED）。 */
     @GetMapping
     public List<PurchaseOrderResponse> list(@RequestParam(name = "status", required = false) String status) {
         return purchaseService.listByStatus(status);
@@ -39,6 +39,18 @@ public class PurchaseController {
                 .findFirst()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "采购单不存在：" + id));
+    }
+
+    /** 待审批 → 待采购。 */
+    @PostMapping("/{id}/approve")
+    public PurchaseOrderResponse approve(@PathVariable Long id) {
+        return purchaseService.approve(id);
+    }
+
+    /** 待审批 → 已驳回。 */
+    @PostMapping("/{id}/reject")
+    public PurchaseOrderResponse reject(@PathVariable Long id) {
+        return purchaseService.reject(id);
     }
 
     /** 待采购 → 已下单。 */
@@ -58,4 +70,21 @@ public class PurchaseController {
     public StockInResult stockIn(@PathVariable Long id, @RequestBody(required = false) StockInRequest request) {
         return purchaseService.stockIn(id, request);
     }
+
+    @GetMapping("/{id}/receipts")
+    public List<PurchaseReceiptResponse> receipts(@PathVariable Long id) {
+        return purchaseService.receipts(id);
+    }
+
+    @PostMapping("/{id}/cancel")
+    public PurchaseOrderResponse cancel(@PathVariable Long id, @RequestBody PurchaseActionRequest request) {
+        return purchaseService.cancel(id, request.reason());
+    }
+
+    @PostMapping("/{id}/close-short")
+    public PurchaseOrderResponse closeShort(@PathVariable Long id, @RequestBody PurchaseActionRequest request) {
+        return purchaseService.closeShort(id, request.reason());
+    }
 }
+
+record PurchaseActionRequest(String reason) {}

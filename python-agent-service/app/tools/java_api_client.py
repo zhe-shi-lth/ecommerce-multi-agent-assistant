@@ -182,11 +182,12 @@ class JavaApiClient:
         image_plan: dict,
         final_summary: str,
         platform: str = "unspecified",
+        trace_id: str | None = None,
     ) -> Optional[int]:
         """线1上架：落库一条仅含商品规划+图片创意的运营计划（无订单、line=LINE1_ONBOARDING）。"""
         url = f"{self.base_url}/api/operation-plans"
         payload = {
-            "traceId": f"line1_{uuid4().hex}",
+            "traceId": trace_id or f"line1_{uuid4().hex}",
             "productId": product_id,
             "orderId": None,
             "productPlanJson": product_plan,
@@ -205,8 +206,24 @@ class JavaApiClient:
             op_id = resp.json().get("id")
             logger.info("线1 运营计划已落库 Java (id={})", op_id)
             return op_id
+        except httpx.HTTPStatusError as e:
+            if trace_id:
+                existing = self.get_operation_plan_by_trace(trace_id)
+                if existing is not None:
+                    return existing.get("id")
+            logger.error("线1 落库运营计划到 Java 失败: {}", e)
+            return None
         except httpx.HTTPError as e:
             logger.error("线1 落库运营计划到 Java 失败: {}", e)
+            return None
+
+    def get_operation_plan_by_trace(self, trace_id: str) -> Optional[dict]:
+        url = f"{self.base_url}/api/operation-plans/by-trace/{trace_id}"
+        try:
+            resp = httpx.get(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError:
             return None
 
     def publish_product(self, product_id: int) -> bool:

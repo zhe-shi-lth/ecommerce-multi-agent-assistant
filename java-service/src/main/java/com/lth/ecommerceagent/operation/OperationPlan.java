@@ -14,6 +14,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -26,6 +27,10 @@ public class OperationPlan {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    @Column(nullable = false)
+    private Long version;
 
     @Column(name = "trace_id", nullable = false, length = 80, unique = true)
     private String traceId;
@@ -88,6 +93,8 @@ public class OperationPlan {
     public Long getId() {
         return id;
     }
+
+    public Long getVersion() { return version; }
 
     public void setId(Long id) {
         this.id = id;

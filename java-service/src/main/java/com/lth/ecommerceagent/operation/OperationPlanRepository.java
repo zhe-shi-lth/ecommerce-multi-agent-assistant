@@ -4,9 +4,17 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.EntityGraph;
 
 public interface OperationPlanRepository extends JpaRepository<OperationPlan, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from OperationPlan p join fetch p.product where p.id = :id")
+    Optional<OperationPlan> findByIdForUpdate(@Param("id") Long id);
 
     @Override
     @EntityGraph(attributePaths = {"product", "order"})

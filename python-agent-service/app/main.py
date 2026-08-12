@@ -5,6 +5,7 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.line1 import router as line1_router
 from app.api.line2 import router as line2_router
@@ -14,6 +15,7 @@ from app.api.platform import router as platform_router
 from app.api.settings import router as settings_router
 from app.api.video import router as video_router
 from app.errors import ConfigError
+from app.media_store import MEDIA_ROOT
 
 load_dotenv()
 
@@ -50,6 +52,8 @@ app = FastAPI(
     title="Ecommerce Agent Service",
     version="0.1.0",
 )
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/agent/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
 
 @app.exception_handler(ConfigError)

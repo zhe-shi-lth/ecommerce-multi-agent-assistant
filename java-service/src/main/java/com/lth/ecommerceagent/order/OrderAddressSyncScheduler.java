@@ -160,8 +160,7 @@ public class OrderAddressSyncScheduler {
                 break;
             }
             // 保留 pendingReason，使运营能区分"超时的是地址不全还是未付款"。
-            order.setStatus("NEEDS_REVIEW");
-            orderRepository.save(order);
+            orderCompletionService.escalateOverdue(order.getId(), slaDays);
             escalated++;
             log.info("待处理超时升级：订单 {} 超过 {} 天仍未处理（{}），已升级为需人工审核",
                     order.getId(), slaDays, order.getPendingReason());

@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import {
   getInventories,
   createInventory,
+  adjustInventory,
+  getInventoryMovements,
   type CreateInventoryInput,
 } from "../api/inventories";
 import { getProducts } from "../api/products";
-import type { Inventory, Product } from "../api/types";
+import type { Inventory, InventoryMovement, Product } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
@@ -32,6 +34,10 @@ export default function Inventories() {
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<CreateInventoryInput>(EMPTY_FORM);
+  const [activeInventory, setActiveInventory] = useState<Inventory | null>(null);
+  const [movements, setMovements] = useState<InventoryMovement[]>([]);
+  const [adjustStock, setAdjustStock] = useState(0);
+  const [adjustReason, setAdjustReason] = useState("");
 
   function refreshAll() {
     setLoading(true);
@@ -53,6 +59,34 @@ export default function Inventories() {
       setForm(EMPTY_FORM);
       setShowForm(false);
       setRows(await getInventories());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openInventory(inventory: Inventory) {
+    setActiveInventory(inventory);
+    setAdjustStock(inventory.currentStock);
+    setAdjustReason("");
+    setMovements([]);
+    try {
+      setMovements(await getInventoryMovements(inventory.id));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleAdjust() {
+    if (!activeInventory || !adjustReason.trim()) return;
+    setBusy(true);
+    try {
+      const updated = await adjustInventory(activeInventory.id, adjustStock, adjustReason.trim());
+      setRows((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      setActiveInventory(updated);
+      setAdjustReason("");
+      setMovements(await getInventoryMovements(updated.id));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -101,9 +135,10 @@ export default function Inventories() {
           ) : (
             <div className="entity-grid">
               {rows.map((i) => {
-                const status = computeStatus(i.currentStock, i.safeStockThreshold);
-                const max = Math.max(i.currentStock, i.safeStockThreshold * 2, 1);
-                const fillPct = Math.min(100, (i.currentStock / max) * 100);
+                const available = i.currentStock - i.reservedStock;
+                const status = computeStatus(available, i.safeStockThreshold);
+                const max = Math.max(available, i.safeStockThreshold * 2, 1);
+                const fillPct = Math.min(100, (available / max) * 100);
                 const thPct = Math.min(100, (i.safeStockThreshold / max) * 100);
                 const stockCls =
                   status === "RISK" ? "risk" : status === "LOW" ? "low" : "enough";
@@ -117,7 +152,7 @@ export default function Inventories() {
                       <span className={`inv-stock ${stockCls}`}>{i.currentStock}</span>
                       <span className="inv-stock-unit">件在库</span>
                     </div>
-                    <div className="stock-bar" title={`当前 ${i.currentStock} / 安全阈值 ${i.safeStockThreshold}`}>
+                    <div className="stock-bar" title={`可用 ${available} / 实物 ${i.currentStock} / 安全阈值 ${i.safeStockThreshold}`}>
                       <div
                         className={`stock-bar-fill ${stockCls}`}
                         style={{ width: `${fillPct}%` }}
@@ -150,6 +185,9 @@ export default function Inventories() {
                       <span className="muted" style={{ fontSize: 12 }}>
                         补货请到「采购补货」
                       </span>
+                      <button className="btn btn-secondary btn-sm" onClick={() => openInventory(i)}>
+                        流水与盘点
+                      </button>
                     </div>
                   </div>
                 );
@@ -206,6 +244,58 @@ export default function Inventories() {
               >
                 {busy ? "保存中…" : "保存库存"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeInventory && (
+        <div className="modal-overlay" onClick={() => setActiveInventory(null)}>
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="modal-title">
+              {productName(activeInventory.productId)} · 库存流水与盘点
+            </div>
+            <div className="modal-body">
+              <div className="listing-form" style={{ marginTop: 0 }}>
+                <div className="notice notice-info">
+                  实物库存 {activeInventory.currentStock}，已预留 {activeInventory.reservedStock}，
+                  可用库存 {activeInventory.currentStock - activeInventory.reservedStock}
+                </div>
+                <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
+                  <label className="field" style={{ flex: 1 }}>
+                    <span>盘点后实物库存</span>
+                    <input type="number" min={activeInventory.reservedStock} value={adjustStock}
+                      onChange={(e) => setAdjustStock(Number(e.target.value))} />
+                  </label>
+                  <label className="field" style={{ flex: 2 }}>
+                    <span>调整原因 *</span>
+                    <input value={adjustReason} placeholder="例如：仓库实盘差异"
+                      onChange={(e) => setAdjustReason(e.target.value)} />
+                  </label>
+                  <button className="btn btn-primary" onClick={handleAdjust}
+                    disabled={busy || !adjustReason.trim() || adjustStock < activeInventory.reservedStock}>
+                    确认盘点
+                  </button>
+                </div>
+                <div style={{ maxHeight: 320, overflow: "auto" }}>
+                  {movements.length === 0 ? (
+                    <div className="notice notice-info">暂无库存流水。</div>
+                  ) : movements.map((movement) => (
+                    <div className="pr-row" key={movement.id}>
+                      <div className="pr-row-name">{movement.movementType}</div>
+                      <div className="pr-row-tags">
+                        <span className="mini neutral">实物 {movement.currentDelta >= 0 ? "+" : ""}{movement.currentDelta}</span>
+                        <span className="mini neutral">预留 {movement.reservedDelta >= 0 ? "+" : ""}{movement.reservedDelta}</span>
+                        <span className="mini neutral">结余 {movement.currentAfter} / 预留 {movement.reservedAfter}</span>
+                      </div>
+                      <div className="muted" style={{ fontSize: 12 }}>{movement.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setActiveInventory(null)}>关闭</button>
             </div>
           </div>
         </div>

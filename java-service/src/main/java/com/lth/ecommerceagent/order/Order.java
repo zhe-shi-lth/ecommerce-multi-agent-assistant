@@ -13,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -25,6 +26,10 @@ public class Order {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    @Column(nullable = false)
+    private Long version;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "product_id", nullable = false)
@@ -48,6 +53,10 @@ public class Order {
 
     @Column(nullable = false, length = 40)
     private String status;
+
+    // 本订单已占用但尚未正式出库的数量；仅 READY_TO_SHIP/SHIPPING_FAILED 可能大于 0。
+    @Column(name = "reserved_quantity", nullable = false)
+    private Integer reservedQuantity = 0;
 
     @Column(name = "address_complete", nullable = false)
     private Boolean addressComplete;
@@ -144,6 +153,15 @@ public class Order {
     @Column(name = "shipped_at")
     private Instant shippedAt;
 
+    @Column(name = "reverse_reason", length = 500)
+    private String reverseReason;
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+    @Column(name = "refunded_at")
+    private Instant refundedAt;
+    @Column(name = "returned_at")
+    private Instant returnedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -207,6 +225,11 @@ public class Order {
     public void setStatus(String status) {
         this.status = status;
     }
+
+    public Long getVersion() { return version; }
+
+    public Integer getReservedQuantity() { return reservedQuantity; }
+    public void setReservedQuantity(Integer reservedQuantity) { this.reservedQuantity = reservedQuantity; }
 
     public Boolean getAddressComplete() {
         return addressComplete;
@@ -421,6 +444,15 @@ public class Order {
     public void setShippedAt(Instant shippedAt) {
         this.shippedAt = shippedAt;
     }
+
+    public String getReverseReason() { return reverseReason; }
+    public void setReverseReason(String reverseReason) { this.reverseReason = reverseReason; }
+    public Instant getCancelledAt() { return cancelledAt; }
+    public void setCancelledAt(Instant cancelledAt) { this.cancelledAt = cancelledAt; }
+    public Instant getRefundedAt() { return refundedAt; }
+    public void setRefundedAt(Instant refundedAt) { this.refundedAt = refundedAt; }
+    public Instant getReturnedAt() { return returnedAt; }
+    public void setReturnedAt(Instant returnedAt) { this.returnedAt = returnedAt; }
 
     public Instant getCreatedAt() {
         return createdAt;

@@ -1,12 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getOrder, completeAddress, markPaid, shipOrder, reviewOrder, recheckOrder } from "../api/orders";
+import { getOrder, completeAddress, markPaid, shipOrder, reviewOrder, recheckOrder,
+  cancelOrder } from "../api/orders";
+import { approveAfterSaleRefund, createAfterSale, getAfterSales, receiveAfterSaleReturn, rejectAfterSale } from "../api/afterSales";
 import { getProducts } from "../api/products";
-import type { Order, Product } from "../api/types";
+import { getInventories, getInventoryMovements } from "../api/inventories";
+import type { AfterSalesOrder, InventoryMovement, Order, Product } from "../api/types";
 import { platformLabel } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import { Icon } from "../components/icons";
 import { errMsg } from "../utils/errMsg";
+import { getAuditLogs, type BusinessAuditLog } from "../api/audit";
 
 // 订单状态 → 中文标签 + 配色（与列表页一致）
 const STATUS_META: Record<string, { label: string; tone: "ok" | "warn" | "bad" | "neutral" }> = {
@@ -17,6 +21,9 @@ const STATUS_META: Record<string, { label: string; tone: "ok" | "warn" | "bad" |
   SHIPPED: { label: "已发货", tone: "ok" },
   REJECTED: { label: "已驳回", tone: "bad" },
   SHIPPING_FAILED: { label: "发货失败", tone: "bad" },
+  CANCELLED: { label: "已取消", tone: "neutral" },
+  REFUNDED: { label: "已退款", tone: "warn" },
+  RETURNED: { label: "已退货入库", tone: "neutral" },
 };
 
 // 可选物流公司（与后端 OrderCompletionService.LOGISTICS 保持一致）
@@ -39,7 +46,10 @@ const SLA_DAYS = 7;
 function suggestionOf(o: Order): string {
   if (o.status === "SHIPPED") return "已发货，履约完成";
   if (o.status === "SHIPPING_FAILED") return "发货失败，可重试发货（见下方失败原因）";
-  if (o.status === "REJECTED") return "审核已驳回，不履约（请于平台侧线下取消/退款）";
+  if (o.status === "REJECTED") return "审核已驳回，可登记退款";
+  if (o.status === "CANCELLED") return "订单已取消，可登记退款";
+  if (o.status === "REFUNDED") return o.shippedAt ? "已退款，等待退货入库" : "退款完成";
+  if (o.status === "RETURNED") return "退货已入库，逆向流程完成";
   if (!o.paid) return "先催付，付款完成后再发货";
   if (!o.addressComplete) return "联系买家补全收货地址后再发货";
   if (o.status === "INSUFFICIENT_STOCK") return "库存不足，先补货再履约";
@@ -77,12 +87,25 @@ export default function OrderDetail() {
   const [shipLogistics, setShipLogistics] = useState<string>(LOGISTICS_COMPANIES[0]);
   const [shipWaybill, setShipWaybill] = useState<string>("");
   const [shipFee, setShipFee] = useState<string>("");
+  const [auditLogs, setAuditLogs] = useState<BusinessAuditLog[]>([]);
+  const [movements, setMovements] = useState<InventoryMovement[]>([]);
+  const [reverseAction, setReverseAction] = useState<"cancel" | null>(null);
+  const [reverseReason, setReverseReason] = useState("");
+  const [afterSales, setAfterSales] = useState<AfterSalesOrder[]>([]);
+  const [afterSaleOpen, setAfterSaleOpen] = useState(false);
+  const [afterSaleAction, setAfterSaleAction] = useState<{ id: number; type: "reject" | "damaged" } | null>(null);
+  const [afterSaleActionReason, setAfterSaleActionReason] = useState("");
+  const [afterSaleForm, setAfterSaleForm] = useState({ type: "REFUND_ONLY" as "REFUND_ONLY" | "RETURN_REFUND", quantity: 1, refundAmount: "", reason: "" });
 
   useEffect(() => {
-    Promise.all([getOrder(orderId), getProducts()])
-      .then(([o, ps]) => {
+    Promise.all([getOrder(orderId), getProducts(), getAuditLogs("ORDER", orderId), getInventories(), getAfterSales(orderId)])
+      .then(async ([o, ps, logs, inventories, afterSaleRows]) => {
         setOrder(o);
         setProducts(ps);
+        setAuditLogs(logs);
+        setAfterSales(afterSaleRows);
+        const inventory = inventories.find((item) => item.productId === o.productId);
+        if (inventory) setMovements(await getInventoryMovements(inventory.id));
       })
       .catch((e) => setError(errMsg(e)))
       .finally(() => setLoading(false));
@@ -116,6 +139,11 @@ export default function OrderDetail() {
     setFeedback(null);
     p.then((u) => {
       setOrder(u);
+      getAuditLogs("ORDER", orderId).then(setAuditLogs).catch(() => undefined);
+      getInventories().then((items) => {
+        const inventory = items.find((item) => item.productId === u.productId);
+        if (inventory) getInventoryMovements(inventory.id).then(setMovements).catch(() => undefined);
+      });
       setFeedback({ msg: okMsg(u), tone: "ok" });
     })
       .catch((e: Error) => setFeedback({ msg: e.message || "操作未成功，请重试", tone: "error" }))
@@ -171,6 +199,60 @@ export default function OrderDetail() {
           ? `库存已补足，状态翻回：${statusMeta(u.status).label}，可发货`
           : `已重新判定，状态：${statusMeta(u.status).label}`
     );
+
+  const submitReverse = () => {
+    if (!reverseAction || !reverseReason.trim()) {
+      setFeedback({ msg: "请填写处理原因", tone: "error" });
+      return;
+    }
+    const promise = cancelOrder(order!.id, reverseReason.trim());
+    setReverseAction(null);
+    setReverseReason("");
+    withFeedback(promise, (u) => `操作完成，状态：${statusMeta(u.status).label}`);
+  };
+
+  const refreshAfterSales = () => getAfterSales(orderId).then(setAfterSales);
+  const submitAfterSale = async () => {
+    const amount = Number(afterSaleForm.refundAmount);
+    if (afterSaleForm.quantity < 1 || !Number.isFinite(amount) || amount <= 0 || !afterSaleForm.reason.trim()) {
+      setFeedback({ msg: "请填写有效的售后数量、退款金额和原因", tone: "error" });
+      return;
+    }
+    setBusy(true);
+    try {
+      await createAfterSale({ orderId, type: afterSaleForm.type, quantity: afterSaleForm.quantity, refundAmount: amount, reason: afterSaleForm.reason.trim() });
+      await refreshAfterSales();
+      setAfterSaleOpen(false);
+      setAfterSaleForm({ type: "REFUND_ONLY", quantity: 1, refundAmount: "", reason: "" });
+      setFeedback({ msg: "售后申请已创建，等待处理", tone: "ok" });
+    } catch (e) { setFeedback({ msg: errMsg(e), tone: "error" }); }
+    finally { setBusy(false); }
+  };
+
+  const runAfterSale = async (action: Promise<AfterSalesOrder>, message: string) => {
+    setBusy(true);
+    try {
+      await action;
+      const [latestOrder] = await Promise.all([getOrder(orderId), refreshAfterSales()]);
+      setOrder(latestOrder);
+      setFeedback({ msg: message, tone: "ok" });
+    } catch (e) { setFeedback({ msg: errMsg(e), tone: "error" }); }
+    finally { setBusy(false); }
+  };
+
+  const submitAfterSaleAction = () => {
+    if (!afterSaleAction || !afterSaleActionReason.trim()) {
+      setFeedback({ msg: "请填写处理原因或验收备注", tone: "error" });
+      return;
+    }
+    const action = afterSaleAction.type === "reject"
+      ? rejectAfterSale(afterSaleAction.id, afterSaleActionReason.trim())
+      : receiveAfterSaleReturn(afterSaleAction.id, "DAMAGED", afterSaleActionReason.trim());
+    const message = afterSaleAction.type === "reject" ? "售后申请已驳回" : "退货已签收并记为不可入库";
+    setAfterSaleAction(null);
+    setAfterSaleActionReason("");
+    runAfterSale(action, message);
+  };
 
   if (loading)
     return (
@@ -251,6 +333,7 @@ export default function OrderDetail() {
           {order.pendingReason && PENDING_REASON_LABEL[order.pendingReason] && (
             <Chip>原因 · {PENDING_REASON_LABEL[order.pendingReason]}</Chip>
           )}
+          <Chip>库存预留 · {order.reservedQuantity ?? 0}</Chip>
         </div>
       </div>
 
@@ -295,7 +378,7 @@ export default function OrderDetail() {
         )}
         {order.status === "REJECTED" && (
           <div className="notice notice-error" style={{ marginBottom: 12 }}>
-            审核已驳回，订单不履约（请于平台侧线下取消/退款）。
+            审核已驳回，订单不再履约，可在本系统登记退款。
           </div>
         )}
 
@@ -401,6 +484,16 @@ export default function OrderDetail() {
               </button>
             </>
           )}
+          {!(["SHIPPED", "RETURNED", "CANCELLED", "REFUNDED", "REJECTED"].includes(order.status)) && (
+            <button className="btn btn-secondary" onClick={() => setReverseAction("cancel")} disabled={busy}>
+              <Icon name="close" /> 取消订单
+            </button>
+          )}
+          {(["CANCELLED", "REJECTED", "SHIPPED", "REFUNDED"].includes(order.status)) && (
+            <button className="btn btn-secondary" onClick={() => setAfterSaleOpen(true)} disabled={busy}>
+              发起售后
+            </button>
+          )}
           {addressIssue && !encrypted && (
             <button className="btn btn-secondary btn-sm" onClick={() => handleCopy(contactScript, "联系客户话术")} disabled={busy}>
               <Icon name="copy" /> 复制联系话术
@@ -429,6 +522,121 @@ export default function OrderDetail() {
             单据尚未完整，无法直接审核通过。请先完成上方高亮的处理项（付款 / 地址补全 / 补货），再点击「通过审核」。
           </div>
         )}
+      </div>
+
+      {reverseAction && (
+        <div className="modal-overlay" onClick={() => setReverseAction(null)}>
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">
+              取消订单
+            </div>
+            <div className="modal-body">
+              <div className="field">
+                <span>处理原因</span>
+                <textarea rows={3} value={reverseReason} onChange={(e) => setReverseReason(e.target.value)} />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setReverseAction(null)}>取消</button>
+              <button className="btn btn-danger" onClick={submitReverse}>确认</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {afterSaleOpen && (
+        <div className="modal-overlay" onClick={() => setAfterSaleOpen(false)}>
+          <div className="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">发起售后</div>
+            <div className="modal-body">
+              <div className="listing-form" style={{ marginTop: 0 }}>
+                <label className="field"><span>售后类型</span><select value={afterSaleForm.type} onChange={(e) => setAfterSaleForm((f) => ({ ...f, type: e.target.value as "REFUND_ONLY" | "RETURN_REFUND" }))}><option value="REFUND_ONLY">仅退款</option><option value="RETURN_REFUND">退货退款</option></select></label>
+                <label className="field"><span>商品数量</span><input type="number" min={1} max={order.quantity} value={afterSaleForm.quantity} onChange={(e) => setAfterSaleForm((f) => ({ ...f, quantity: Number(e.target.value) }))} /></label>
+                <label className="field"><span>退款金额</span><input type="number" min={0.01} step="0.01" value={afterSaleForm.refundAmount} onChange={(e) => setAfterSaleForm((f) => ({ ...f, refundAmount: e.target.value }))} /></label>
+                <label className="field"><span>售后原因</span><textarea rows={3} value={afterSaleForm.reason} onChange={(e) => setAfterSaleForm((f) => ({ ...f, reason: e.target.value }))} /></label>
+              </div>
+            </div>
+            <div className="modal-actions"><button className="btn btn-secondary" onClick={() => setAfterSaleOpen(false)}>取消</button><button className="btn btn-primary" onClick={submitAfterSale} disabled={busy}>提交申请</button></div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-header"><h3>售后处理</h3><span className="card-sub">{afterSales.length} 单</span></div>
+        {afterSales.length === 0 ? <div className="notice notice-info" style={{ margin: 14 }}>暂无售后申请。</div> : afterSales.map((item) => (
+          <div className="pr-row" key={item.id}>
+            <div className="pr-row-name">{item.afterSaleNo}</div>
+            <div className="pr-row-tags">
+              <span className="mini neutral">{item.type === "REFUND_ONLY" ? "仅退款" : "退货退款"}</span>
+              <span className="mini neutral">{item.quantity} 件</span>
+              <span className="mini neutral">{money(item.refundAmount)}</span>
+              <span className="mini warn">{item.status}</span>
+              <span className="mini neutral">{item.reason}</span>
+            </div>
+            <div className="pr-row-spacer" />
+            {item.status === "PENDING" && <><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setAfterSaleAction({ id: item.id, type: "reject" }); setAfterSaleActionReason(""); }}>驳回</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={() => runAfterSale(approveAfterSaleRefund(item.id), "退款已确认")}>确认退款</button></>}
+            {item.status === "WAITING_RETURN" && <><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setAfterSaleAction({ id: item.id, type: "damaged" }); setAfterSaleActionReason(""); }}>不可入库</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={() => runAfterSale(receiveAfterSaleReturn(item.id, "RESTOCK", "退货验收合格并入库"), "退货已验收入库")}>验收入库</button></>}
+          </div>
+        ))}
+      </div>
+
+      {afterSaleAction && (
+        <div className="modal-overlay" onClick={() => setAfterSaleAction(null)}>
+          <div className="modal" role="dialog" style={{ maxWidth: 460, width: "92%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{afterSaleAction.type === "reject" ? "驳回售后申请" : "退货不可入库"}</div>
+            <div className="modal-body">
+              <label className="field">
+                <span>{afterSaleAction.type === "reject" ? "驳回原因" : "验收备注"}</span>
+                <textarea rows={3} value={afterSaleActionReason} onChange={(e) => setAfterSaleActionReason(e.target.value)} autoFocus />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setAfterSaleAction(null)} disabled={busy}>返回</button>
+              <button className="btn btn-danger" onClick={submitAfterSaleAction} disabled={busy}>确认处理</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-header">
+          <h3>操作记录</h3>
+          <span className="card-sub">{auditLogs.length} 条</span>
+        </div>
+        {auditLogs.length === 0 ? (
+          <div className="notice notice-info" style={{ margin: 14 }}>暂无操作记录。</div>
+        ) : auditLogs.map((log) => (
+          <div className="pr-row" key={log.id}>
+            <div className="pr-row-name">{log.action}</div>
+            <div className="pr-row-tags">
+              {log.beforeStatus && <span className="mini neutral">{log.beforeStatus} → {log.afterStatus}</span>}
+              <span className="mini neutral">操作人 {log.operator}</span>
+              <span className="mini neutral">{fmt(log.createdAt)}</span>
+              {log.detail && <span className="mini warn">{log.detail}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <h3>库存流水</h3>
+          <span className="card-sub">{movements.length} 条</span>
+        </div>
+        {movements.length === 0 ? (
+          <div className="notice notice-info" style={{ margin: 14 }}>暂无库存流水。</div>
+        ) : movements.map((movement) => (
+          <div className="pr-row" key={movement.id}>
+            <div className="pr-row-name">{movement.movementType}</div>
+            <div className="pr-row-tags">
+              <span className="mini neutral">实物 {movement.currentDelta >= 0 ? "+" : ""}{movement.currentDelta}</span>
+              <span className="mini neutral">预留 {movement.reservedDelta >= 0 ? "+" : ""}{movement.reservedDelta}</span>
+              <span className="mini neutral">结余 {movement.currentAfter} / 预留 {movement.reservedAfter}</span>
+              <span className="mini neutral">{fmt(movement.createdAt)}</span>
+              <span className="mini warn">{movement.reason}</span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* 参考信息：买家与收件人 */}

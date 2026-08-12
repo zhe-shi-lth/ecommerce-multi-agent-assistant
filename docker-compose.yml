@@ -56,6 +56,8 @@ services:
       JAVA_API_BASE_URL: http://java:8080
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_API_KEY: ${SERVICE_API_KEY}
+    volumes:
+      - app_data:/data
     depends_on:
       java:
         condition: service_healthy
@@ -90,3 +92,4 @@ networks:
 
 volumes:
   postgres_data:
+  app_data:

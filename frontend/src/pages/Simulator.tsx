@@ -94,8 +94,8 @@ export default function Simulator() {
         title={isReal ? "平台订单同步" : "平台模拟"}
         subtitle={
           isReal
-            ? "从各电商平台拉取真实订单。订单按「已确认(CONFIRMED)的运营计划」归属到对应商品，会联动扣减库存、写入日销，同步刷新订单 / 库存 / 销售监控三个 tab。"
-            : "用模拟订单跑通与真实拉单完全相同的链路（不调用真实平台）。订单按「已确认(CONFIRMED)的运营计划」逐单生成——计划才代表商品已真正在某平台上架，会联动扣减库存、写入日销，一次性灌满订单 / 库存 / 销售监控三个 tab。"
+            ? "从各电商平台拉取真实订单。完整且可履约的订单会原子预留库存；确认发货后才扣减实物库存并写入日销。"
+            : "用模拟订单跑通与真实拉单相同的内部链路（不调用真实平台）：订单生成后按付款、地址和审核事实流转，满足履约条件时预留库存，确认发货后再出库并记销售。"
         }
         icon={<Icon name="simulator" />}
       />
@@ -165,7 +165,7 @@ export default function Simulator() {
       <div className="card listing-review">
         <h3 style={{ marginTop: 0 }}>⚡ 快速模拟（短期·当天）</h3>
         <p className="muted" style={{ marginTop: 0 }}>
-          为<strong>上方勾选的已确认计划</strong>生成「当天少量」订单，立即灌满订单 / 库存 / 销售监控三个 tab，无需配置复填。适合快速验证链路。
+          为<strong>上方勾选的已确认计划</strong>生成「当天少量」订单，并按真实规则判定、预留库存；需要在订单页确认发货后才会出库并写入销售。适合快速验证链路。
         </p>
         <div className="listing-form" style={{ marginTop: 8, flexDirection: "row", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div className="field" style={{ flex: 1, minWidth: 160 }}>

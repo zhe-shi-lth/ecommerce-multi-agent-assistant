@@ -48,4 +48,8 @@ def video_generate(req: VideoGenerateRequest) -> dict:
 @router.get("/video/tasks/{task_id}")
 def video_task(task_id: str) -> dict:
     gen = get_video_generator()
-    return gen.query_task(task_id)
+    result = gen.query_task(task_id)
+    if result.get("status") == "SUCCEEDED" and result.get("video_url"):
+        from app.media_store import persist_media
+        result["video_url"] = persist_media(result["video_url"], "video")
+    return result

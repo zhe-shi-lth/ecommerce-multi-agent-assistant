@@ -60,32 +60,14 @@ def sample_paid_order() -> OrderContext:
 
 
 def test_product_planning_agent_generates_listing_plan():
-    plan = ProductPlanningAgent().run(sample_product())
-
-    assert "便携式榨汁杯" in plan.recommended_title
-    assert len(plan.selling_points) == 3
-    assert plan.detail_description
-    assert plan.listing_suggestion
-    assert plan.seo_keywords
-    assert plan.meta_description
-    assert set(plan.platform_copies.keys()) == {"taobao", "douyin", "xiaohongshu"}
+    with pytest.raises(ConfigError, match="文本大模型"):
+        ProductPlanningAgent().run(sample_product())
 
 
 def test_image_creative_agent_uses_product_selling_points():
     product = sample_product()
-
-    image_plan = ImageCreativeAgent().run(product, notes="测试备注")
-
-    assert "便携式榨汁杯" in image_plan.main_image_prompt
-    assert "办公室" in image_plan.scene_image_prompt
-    assert image_plan.image_style
-    assert image_plan.image_risk_notes
-    # 规则路径下也应产出确定性审核结果
-    review = image_plan.image_review_result
-    assert review is not None
-    assert review.reviewer == "rule"
-    assert review.risk_level in {"低风险", "中风险", "高风险"}
-    assert 0 <= review.overall_score <= 100
+    with pytest.raises(ConfigError, match="文本大模型"):
+        ImageCreativeAgent().run(product, notes="测试备注")
 
 
 def test_image_review_rule_based_maps_risk_notes():
@@ -164,28 +146,13 @@ def test_order_fulfillment_agent_requires_review_for_unpaid_order():
 
 
 def test_supervisor_agent_runs_all_agents_and_summarizes_result():
-    result = SupervisorAgent().run(
-        product=sample_product(),
-        inventory=sample_low_inventory(),
-        order=sample_paid_order(),
-        trigger_type="GENERATE_OPERATION_PLAN",
-    )
-
-    assert result.trace_id.startswith("trace_")
-    assert result.product_plan.recommended_title
-    assert result.image_plan.main_image_prompt
-    assert result.image_plan.image_review_result is not None
-    assert result.inventory_plan.should_restock is True
-    assert result.fulfillment_plan.can_ship is True
-    assert result.final_summary
-    assert result.manual_review_required is False
-    assert [run.agent_name for run in result.agent_runs] == [
-        "SUPERVISOR_AGENT",
-        "PRODUCT_PLANNING_AGENT",
-        "IMAGE_CREATIVE_AGENT",
-        "INVENTORY_PURCHASE_AGENT",
-        "ORDER_FULFILLMENT_AGENT",
-    ]
+    with pytest.raises(ConfigError, match="文本大模型"):
+        SupervisorAgent().run(
+            product=sample_product(),
+            inventory=sample_low_inventory(),
+            order=sample_paid_order(),
+            trigger_type="GENERATE_OPERATION_PLAN",
+        )
 
 
 def test_supervisor_routes_inventory_review_skips_product_and_image():

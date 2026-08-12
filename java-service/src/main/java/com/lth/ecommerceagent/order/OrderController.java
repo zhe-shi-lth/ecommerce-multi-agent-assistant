@@ -60,6 +60,9 @@ public class OrderController {
                 : "MANUAL" + System.currentTimeMillis() + String.format("%06d", MANUAL_SEQ.incrementAndGet());
         order.setPlatformOrderId(platformOrderId);
         Order saved = orderRepository.save(order);
+        if ("READY_TO_SHIP".equals(saved.getStatus())) {
+            saved = orderCompletionService.reserveImportedOrder(saved);
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(saved));
     }
 
@@ -78,9 +81,9 @@ public class OrderController {
         List<InsufficientStockSummary> list = orderRepository.summarizeInsufficientStock();
         for (InsufficientStockSummary s : list) {
             inventoryRepository.findByProductId(s.getProductId()).ifPresent(inv -> {
-                int cur = inv.getCurrentStock();
-                s.setCurrentStock(cur);
-                s.setShortQuantity(Math.max(0, (int) s.getBacklogQuantity() - cur));
+                int available = inv.getCurrentStock() - inv.getReservedStock();
+                s.setCurrentStock(available);
+                s.setShortQuantity(Math.max(0, (int) s.getBacklogQuantity() - available));
             });
         }
         return list;
@@ -101,17 +104,14 @@ public class OrderController {
 
     @PutMapping("/{id}")
     public OrderResponse update(@PathVariable Long id, @RequestBody OrderCreateRequest request) {
-        Order order = findOrder(id);
-        Product product = findProduct(request.productId());
-        apply(request, product, order);
-        return toResponse(orderRepository.save(order));
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                "订单不允许通用修改，请使用付款、补地址、审核、发货、取消、退款或退货等专用动作");
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
-        Order order = findOrder(id);
-        orderRepository.delete(order);
-        return ResponseEntity.noContent().build();
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                "订单属于业务凭证，不允许删除；请使用取消或退款动作");
     }
 
     /**
@@ -171,10 +171,6 @@ public class OrderController {
     @PostMapping("/{id}/ship")
     public OrderResponse ship(@PathVariable Long id, @RequestBody(required = false) ShipRequest request) {
         Order order = findOrder(id);
-        if (!"READY_TO_SHIP".equals(order.getStatus()) && !"SHIPPING_FAILED".equals(order.getStatus())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "仅「可发货 / 发货失败」订单可以发货，当前状态：" + order.getStatus());
-        }
         Order saved = orderCompletionService.ship(order, request != null ? request : new ShipRequest(null, null, null, null));
         return toResponse(saved);
     }
@@ -231,19 +227,42 @@ public class OrderController {
         return orderCompletionService.recheckProduct(productId);
     }
 
+    @PostMapping("/{id}/cancel")
+    public OrderResponse cancel(@PathVariable Long id, @RequestBody OrderReverseRequest request) {
+        return toResponse(orderCompletionService.cancel(findOrder(id), request.reason()));
+    }
+
+    @PostMapping("/{id}/refund")
+    public OrderResponse refund(@PathVariable Long id, @RequestBody OrderReverseRequest request) {
+        throw new ResponseStatusException(HttpStatus.GONE, "退款已统一迁移到售后单，请使用 /api/after-sales");
+    }
+
+    @PostMapping("/{id}/return-stock-in")
+    public OrderResponse returnStockIn(@PathVariable Long id, @RequestBody OrderReverseRequest request) {
+        throw new ResponseStatusException(HttpStatus.GONE, "退货入库已统一迁移到售后单，请使用 /api/after-sales/{id}/receive-return");
+    }
+
     private void apply(OrderCreateRequest request, Product product, Order order) {
         order.setProduct(product);
         if (request.platform() != null && !request.platform().isBlank()) {
             order.setPlatform(request.platform());
         }
         order.setQuantity(request.quantity());
-        order.setStatus(request.status());
         order.setAddressComplete(request.addressComplete());
         order.setPaid(request.paid());
         order.setManualReviewRequired(request.manualReviewRequired());
-        order.setFulfillmentSuggestionStatus(request.fulfillmentSuggestionStatus());
+        String status;
+        if (Boolean.TRUE.equals(request.manualReviewRequired())) {
+            status = "NEEDS_REVIEW";
+        } else if (!Boolean.TRUE.equals(request.paid()) || !Boolean.TRUE.equals(request.addressComplete())) {
+            status = "PENDING_ANALYSIS";
+        } else {
+            status = "READY_TO_SHIP";
+        }
+        order.setStatus(status);
+        order.setFulfillmentSuggestionStatus(status);
         // 待处理原因在待分析态才有意义：依据付款/地址/状态推导；离开待分析由流转逻辑清空。
-        order.setPendingReason(Order.computePendingReason(request.paid(), request.addressComplete(), request.status()));
+        order.setPendingReason(Order.computePendingReason(request.paid(), request.addressComplete(), status));
         order.setReceiverName(request.receiverName());
         order.setReceiverPhone(request.receiverPhone());
         order.setReceiverProvince(request.receiverProvince());
@@ -276,6 +295,7 @@ public class OrderController {
                 o.getPlatformOrderId(),
                 o.getQuantity(),
                 o.getStatus(),
+                o.getReservedQuantity(),
                 o.getAddressComplete(),
                 o.getPaid(),
                 o.getManualReviewRequired(),
@@ -300,6 +320,10 @@ public class OrderController {
                 o.getWaybillNo(),
                 o.getEncrypted(),
                 o.getShippedAt(),
+                o.getReverseReason(),
+                o.getCancelledAt(),
+                o.getRefundedAt(),
+                o.getReturnedAt(),
                 o.getCreatedAt(),
                 o.getUpdatedAt());
     }

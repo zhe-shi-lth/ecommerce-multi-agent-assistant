@@ -14,28 +14,38 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 /**
  * 采购补货单（线2 库存处理工作台的核心实体）。
  *
- * <p>生命周期：CREATED(待采购) → ORDERED(已下单) → INBOUND(待入库) → STOCKED(已入库)。
- * 「待确认补货建议」由销售监控的库存不足汇总派生（不落库），商家确认后生成 CREATED 采购单；
+ * <p>生命周期：PENDING_APPROVAL(待审批) → CREATED(待采购) → ORDERED(已下单) → INBOUND(待入库) → STOCKED(已入库)。
+ * 商家发起采购申请时即生成采购单，审批通过后进入待采购；
  * 入库(STOCKED)时增加对应商品库存并触发该商品缺货订单的重新判定（见 PurchaseService.stockIn）。
  */
 @Entity
 @Table(name = "purchase_orders")
 public class PurchaseOrder {
 
+    public static final String PENDING_APPROVAL = "PENDING_APPROVAL";
+    public static final String REJECTED = "REJECTED";
     public static final String CREATED = "CREATED";
     public static final String ORDERED = "ORDERED";
     public static final String INBOUND = "INBOUND";
+    public static final String PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED";
     public static final String STOCKED = "STOCKED";
+    public static final String CANCELLED = "CANCELLED";
+    public static final String CLOSED_SHORT = "CLOSED_SHORT";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    @Column(nullable = false)
+    private Long version;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "product_id", nullable = false)
@@ -71,6 +81,9 @@ public class PurchaseOrder {
     // 实际入库数量（默认 = quantity；现实可能到货少于下单）
     @Column(name = "actual_quantity")
     private Integer actualQuantity;
+
+    @Column(name = "received_quantity", nullable = false)
+    private Integer receivedQuantity = 0;
 
     // 入库备注（破损 / 少发说明等）
     @Column(name = "inbound_note", length = 500)
@@ -111,6 +124,10 @@ public class PurchaseOrder {
     public Long getId() {
         return id;
     }
+
+    public Long getVersion() { return version; }
+    public Integer getReceivedQuantity() { return receivedQuantity; }
+    public void setReceivedQuantity(Integer receivedQuantity) { this.receivedQuantity = receivedQuantity; }
 
     public void setId(Long id) {
         this.id = id;

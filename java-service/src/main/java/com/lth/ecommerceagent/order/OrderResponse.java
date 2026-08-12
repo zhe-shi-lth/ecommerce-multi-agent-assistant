@@ -11,6 +11,7 @@ public record OrderResponse(
         String platformOrderId,
         Integer quantity,
         String status,
+        Integer reservedQuantity,
         Boolean addressComplete,
         Boolean paid,
         Boolean manualReviewRequired,
@@ -35,6 +36,10 @@ public record OrderResponse(
         String waybillNo,
         Boolean encrypted,
         Instant shippedAt,
+        String reverseReason,
+        Instant cancelledAt,
+        Instant refundedAt,
+        Instant returnedAt,
         Instant createdAt,
         Instant updatedAt) {
 }

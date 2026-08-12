@@ -10,12 +10,15 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.lth.ecommerceagent.inventory.Inventory;
 import com.lth.ecommerceagent.inventory.InventoryRepository;
+import com.lth.ecommerceagent.inventory.InventoryMovementService;
+import com.lth.ecommerceagent.audit.BusinessAuditService;
 import com.lth.ecommerceagent.python.PythonAgentClient;
 import com.lth.ecommerceagent.python.PythonAgentException;
 import com.lth.ecommerceagent.python.PythonFulfillmentResult;
 import com.lth.ecommerceagent.python.PythonOrderFulfillmentRequest;
 import com.lth.ecommerceagent.python.PythonShipRequest;
 import com.lth.ecommerceagent.python.PythonShipResult;
+import com.lth.ecommerceagent.sales.SalesRecordingService;
 
 /**
  * 地址补全的落库与履约状态推导（单一真相源）。
@@ -30,21 +33,36 @@ public class OrderCompletionService {
     private final OrderRepository orderRepository;
     private final InventoryRepository inventoryRepository;
     private final PythonAgentClient pythonAgentClient;
+    private final BusinessAuditService auditService;
+    private final InventoryMovementService movementService;
+    private final SalesRecordingService salesRecordingService;
 
     public OrderCompletionService(
             OrderRepository orderRepository,
             InventoryRepository inventoryRepository,
-            PythonAgentClient pythonAgentClient) {
+            PythonAgentClient pythonAgentClient,
+            BusinessAuditService auditService,
+            InventoryMovementService movementService,
+            SalesRecordingService salesRecordingService) {
         this.orderRepository = orderRepository;
         this.inventoryRepository = inventoryRepository;
         this.pythonAgentClient = pythonAgentClient;
+        this.auditService = auditService;
+        this.movementService = movementService;
+        this.salesRecordingService = salesRecordingService;
     }
 
     @Transactional
     public Order markAddressComplete(Order order) {
+        order = lockOrder(order.getId());
+        String before = order.getStatus();
         order.setAddressComplete(true);
         resolveFulfillment(order);
-        return orderRepository.save(order);
+        reserveStockIfReady(order);
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "COMPLETE_ADDRESS",
+                before, saved.getStatus(), "收货地址已确认完整");
+        return saved;
     }
 
     /**
@@ -56,8 +74,40 @@ public class OrderCompletionService {
      */
     @Transactional
     public Order markPaid(Order order) {
+        order = lockOrder(order.getId());
+        String before = order.getStatus();
         order.setPaid(true);
         resolveFulfillment(order);
+        reserveStockIfReady(order);
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "MARK_PAID",
+                before, saved.getStatus(), "付款状态已确认");
+        return saved;
+    }
+
+    @Transactional
+    public Order escalateOverdue(Long orderId, int slaDays) {
+        Order order = lockOrder(orderId);
+        if (!"PENDING_ANALYSIS".equals(order.getStatus())
+                || (Boolean.TRUE.equals(order.getPaid()) && Boolean.TRUE.equals(order.getAddressComplete()))) {
+            return order;
+        }
+        String before = order.getStatus();
+        order.setStatus("NEEDS_REVIEW");
+        order.setFulfillmentSuggestionStatus("NEEDS_REVIEW");
+        order.setManualReviewRequired(true);
+        order.setPendingReason(Order.computePendingReason(order.getPaid(), order.getAddressComplete(), "PENDING_ANALYSIS"));
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "ESCALATE_OVERDUE",
+                before, saved.getStatus(), "待处理超过 " + slaDays + " 天，已升级人工审核");
+        return saved;
+    }
+
+    /** 平台拉单后对已满足全部事实的订单执行同一套原子预留。 */
+    @Transactional
+    public Order reserveImportedOrder(Order order) {
+        if (!"READY_TO_SHIP".equals(order.getStatus())) return order;
+        reserveStockIfReady(order);
         return orderRepository.save(order);
     }
 
@@ -69,26 +119,37 @@ public class OrderCompletionService {
      */
     @Transactional
     public Order recheckStock(Order order) {
-        Inventory inventory = inventoryRepository.findByProductId(order.getProduct().getId())
+        order = lockOrder(order.getId());
+        Long productId = order.getProduct().getId();
+        Inventory inventory = inventoryRepository.findByProductId(productId)
                 .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + order.getProduct().getId()));
-        if (inventory.getCurrentStock() < order.getQuantity()) {
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + productId));
+        int available = inventory.getCurrentStock() - inventory.getReservedStock();
+        if (available < order.getQuantity()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "库存仍不足（当前 " + inventory.getCurrentStock() + " < 订单 " + order.getQuantity()
+                    "库存仍不足（可售 " + available + " < 订单 " + order.getQuantity()
                             + "），请先补足库存再重新判定");
         }
         // 补货后「重新判定」= 真去库存拿货：订单翻成可发货的同时把对应货量从库存扣掉，账目才闭环。
         // 仅当本单确能履约（付款/地址齐全且无人工审核，落为 READY_TO_SHIP）才扣减；
         // 其余回落态（待分析/审核）并不占用库存，绝不静默扣减。
         resolveRecheck(order, true);
-        if ("READY_TO_SHIP".equals(order.getStatus())) {
-            int newStock = Math.max(0, inventory.getCurrentStock() - order.getQuantity());
-            inventory.setCurrentStock(newStock);
-            inventory.setInventoryStatus(recomputeStatus(newStock, inventory.getSafeStockThreshold()));
-            inventoryRepository.save(inventory);
+        if (!"READY_TO_SHIP".equals(order.getStatus())) {
+            Order saved = orderRepository.save(order);
+            auditService.record("ORDER", "ORDER", saved.getId(), "RECHECK_STOCK",
+                    "INSUFFICIENT_STOCK", saved.getStatus(), "库存重判完成，订单尚不可发货");
+            return saved;
         }
-        return orderRepository.save(order);
+        if (!reserve(order)) {
+            resolveRecheck(order, false);
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "库存不足或库存已被其他订单占用，请补足库存后再重新判定");
+        }
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "RECHECK_STOCK",
+                "INSUFFICIENT_STOCK", saved.getStatus(), "库存已原子预留，订单转为可发货");
+        return saved;
     }
 
     /**
@@ -130,7 +191,7 @@ public class OrderCompletionService {
         Inventory inventory = inventoryRepository.findByProductId(productId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Inventory not found for product: " + productId));
-        int avail = inventory.getCurrentStock();
+        int avail = inventory.getCurrentStock() - inventory.getReservedStock();
         group.sort((a, b) -> {
             int c = a.getCreatedAt().compareTo(b.getCreatedAt());
             return c != 0 ? c : Long.compare(a.getId(), b.getId());
@@ -141,10 +202,11 @@ public class OrderCompletionService {
                     && Boolean.TRUE.equals(o.getPaid())
                     && Boolean.TRUE.equals(o.getAddressComplete())
                     && avail >= o.getQuantity();
-            if (canFulfill) {
+            boolean reserved = canFulfill && reserve(o);
+            if (reserved) {
                 avail -= o.getQuantity();
             }
-            resolveRecheck(o, canFulfill);
+            resolveRecheck(o, reserved);
             String after = o.getStatus();
             if ("READY_TO_SHIP".equals(after)) {
                 result.incrementReady();
@@ -154,12 +216,14 @@ public class OrderCompletionService {
                 result.incrementOther();
             }
             orderRepository.save(o);
+            if (!"INSUFFICIENT_STOCK".equals(after)) {
+                auditService.record("ORDER", "ORDER", o.getId(), "AUTO_RECHECK_STOCK",
+                        "INSUFFICIENT_STOCK", after,
+                        reserved ? "库存已自动预留" : "订单条件变化，重新归类");
+            }
         }
         // 库存联动：本次刷新实际占用的货（仅翻成 READY_TO_SHIP 的订单）从库存扣减，并据水位重算库存状态。
-        int newStock = Math.max(0, avail);
-        inventory.setCurrentStock(newStock);
-        inventory.setInventoryStatus(recomputeStatus(newStock, inventory.getSafeStockThreshold()));
-        inventoryRepository.save(inventory);
+        // 每笔可发货订单已通过条件 UPDATE 原子扣减库存，这里不再用旧快照覆盖数据库。
     }
 
     /** 据当前库存与警戒水位重算库存状态（RISK/LOW/ENOUGH），与 SimulationService 同口径，避免规则分叉。 */
@@ -272,6 +336,16 @@ public class OrderCompletionService {
      */
     @Transactional
     public Order ship(Order order, ShipRequest request) {
+        order = lockOrder(order.getId());
+        if ("SHIPPED".equals(order.getStatus())) {
+            return order;
+        }
+        if (!"READY_TO_SHIP".equals(order.getStatus()) && !"SHIPPING_FAILED".equals(order.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "仅「可发货 / 发货失败」订单可以发货，当前状态：" + order.getStatus());
+        }
+        Long productId = order.getProduct().getId();
+        String before = order.getStatus();
         // 发货运费校验：必填（包邮填 0，避免利润出现空值）；不能为负；来源类型仅允许 MANUAL / TEMPLATE。
         // 否则 API 直调可传异常值，或留下「类型为 MANUAL 但金额为空」的歧义数据。
         if (request.shippingFee() == null) {
@@ -299,8 +373,20 @@ public class OrderCompletionService {
                 order.setStatus("SHIPPING_FAILED");
                 order.setFulfillmentSuggestionStatus("SHIPPING_FAILED");
                 order.setPendingReason(result.message() != null ? result.message() : "平台拒绝受理发货");
-                return orderRepository.save(order);
+                Order saved = orderRepository.save(order);
+                auditService.record("ORDER", "ORDER", saved.getId(), "SHIP_FAILED",
+                        before, saved.getStatus(), saved.getPendingReason());
+                return saved;
             }
+            if (order.getReservedQuantity() == null || order.getReservedQuantity() != order.getQuantity()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "订单没有完整库存预留，无法发货，请重新判定库存");
+            }
+            if (inventoryRepository.shipReservedStock(order.getProduct().getId(), order.getQuantity()) == 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "预留库存异常，无法完成出库");
+            }
+            order.setReservedQuantity(0);
+            movementService.record(order.getProduct().getId(), "ORDER_SHIP",
+                    -order.getQuantity(), -order.getQuantity(), "ORDER", order.getId(), "订单发货出库");
             // 受理成功：写回物流与发货时间，翻成已发货。
             order.setLogisticsCompany(logistics);
             order.setWaybillNo(waybill);
@@ -323,13 +409,20 @@ public class OrderCompletionService {
             order.setFulfillmentSuggestionStatus("SHIPPED");
             order.setPendingReason(null);
             order.setShippedAt(java.time.Instant.now());
-            return orderRepository.save(order);
+            salesRecordingService.recordShipment(order);
+            Order saved = orderRepository.save(order);
+            auditService.record("ORDER", "ORDER", saved.getId(), "SHIP",
+                    before, saved.getStatus(), "物流：" + logistics + "，运单号：" + waybill);
+            return saved;
         } catch (PythonAgentException e) {
             // 平台发货服务调用失败（如未启动）：同样落 SHIPPING_FAILED 待重试，不让前端静默成功。
             order.setStatus("SHIPPING_FAILED");
             order.setFulfillmentSuggestionStatus("SHIPPING_FAILED");
             order.setPendingReason(e.getMessage());
-            return orderRepository.save(order);
+            Order saved = orderRepository.save(order);
+            auditService.record("ORDER", "ORDER", saved.getId(), "SHIP_FAILED",
+                    before, saved.getStatus(), saved.getPendingReason());
+            return saved;
         }
     }
 
@@ -342,12 +435,19 @@ public class OrderCompletionService {
      */
     @Transactional
     public Order review(Order order, boolean approve) {
+        order = lockOrder(order.getId());
+        Long productId = order.getProduct().getId();
+        String before = order.getStatus();
         if (!approve) {
+            releaseReservation(order, "人工审核驳回释放库存预留");
             order.setManualReviewRequired(false);
             order.setPendingReason(null);
             order.setStatus("REJECTED");
             order.setFulfillmentSuggestionStatus("REJECTED");
-            return orderRepository.save(order);
+            Order saved = orderRepository.save(order);
+            auditService.record("ORDER", "ORDER", saved.getId(), "REVIEW_REJECT",
+                    before, saved.getStatus(), "人工审核驳回");
+            return saved;
         }
 
         // 审核通过前必须先校验单据完整性：未付款 / 地址不全 / 库存不足 都不得被"放行"。
@@ -360,13 +460,14 @@ public class OrderCompletionService {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "收货地址不完整，请先确认地址已补全，再审核通过");
         }
-        Inventory inventory = inventoryRepository.findByProductId(order.getProduct().getId())
+        Inventory inventory = inventoryRepository.findByProductId(productId)
                 .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + order.getProduct().getId()));
-        if (inventory.getCurrentStock() < order.getQuantity()) {
+                        HttpStatus.NOT_FOUND, "Inventory not found for product: " + productId));
+        int available = inventory.getCurrentStock() - inventory.getReservedStock();
+        if (available < order.getQuantity()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "库存不足（当前 " + inventory.getCurrentStock() + " < 订单 " + order.getQuantity()
+                    "库存不足（可售 " + available + " < 订单 " + order.getQuantity()
                             + "），请先生成补货计划补足库存，再审核通过");
         }
 
@@ -378,7 +479,132 @@ public class OrderCompletionService {
         order.setFulfillmentSuggestionStatus("READY_TO_SHIP");
         order.setStatus("READY_TO_SHIP");
         order.setFulfillmentPlanJson(result.toJsonMap());
-        return orderRepository.save(order);
+        reserveStockIfReady(order);
+        if (!"READY_TO_SHIP".equals(order.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "库存不足或库存已被其他订单占用，请先补货再审核通过");
+        }
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "REVIEW_APPROVE",
+                before, saved.getStatus(), "人工审核通过");
+        return saved;
+    }
+
+    @Transactional
+    public Order cancel(Order order, String reason) {
+        order = lockOrder(order.getId());
+        if (Set.of("SHIPPED", "RETURNED", "CANCELLED", "REFUNDED").contains(order.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前状态不能取消：" + order.getStatus());
+        }
+        String before = order.getStatus();
+        releaseReservation(order, "订单取消释放库存");
+        order.setStatus("CANCELLED");
+        order.setFulfillmentSuggestionStatus("CANCELLED");
+        order.setReverseReason(requireReason(reason));
+        order.setCancelledAt(java.time.Instant.now());
+        order.setPendingReason(null);
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "CANCEL", before, saved.getStatus(), saved.getReverseReason());
+        return saved;
+    }
+
+    @Transactional
+    public Order refund(Order order, String reason) {
+        order = lockOrder(order.getId());
+        if (!Set.of("CANCELLED", "REJECTED", "SHIPPED").contains(order.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "仅已取消、已驳回或已发货订单可以退款");
+        }
+        String before = order.getStatus();
+        releaseReservation(order, "退款释放库存预留");
+        if (order.getShippedAt() != null) {
+            salesRecordingService.reverseRefund(order);
+            java.math.BigDecimal goodsCost = order.getGoodsCostSnapshot() != null
+                    ? order.getGoodsCostSnapshot() : java.math.BigDecimal.ZERO;
+            java.math.BigDecimal shippingFee = order.getShippingFee() != null
+                    ? order.getShippingFee() : java.math.BigDecimal.ZERO;
+            order.setGrossProfit(goodsCost.add(shippingFee).negate());
+        } else {
+            order.setGrossProfit(java.math.BigDecimal.ZERO);
+        }
+        order.setStatus("REFUNDED");
+        order.setFulfillmentSuggestionStatus("REFUNDED");
+        order.setReverseReason(requireReason(reason));
+        order.setRefundedAt(java.time.Instant.now());
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "REFUND", before, saved.getStatus(), saved.getReverseReason());
+        return saved;
+    }
+
+    @Transactional
+    public Order confirmReturn(Order order, String reason) {
+        order = lockOrder(order.getId());
+        if (!"REFUNDED".equals(order.getStatus()) || order.getShippedAt() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "仅已发货且已退款订单可以确认退货入库");
+        }
+        if (inventoryRepository.incrementStock(order.getProduct().getId(), order.getQuantity()) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "退货入库失败：库存记录不存在");
+        }
+        movementService.record(order.getProduct().getId(), "ORDER_RETURN",
+                order.getQuantity(), 0, "ORDER", order.getId(), "退货重新入库");
+        String before = order.getStatus();
+        java.math.BigDecimal shippingFee = order.getShippingFee() != null
+                ? order.getShippingFee() : java.math.BigDecimal.ZERO;
+        order.setGrossProfit(shippingFee.negate());
+        order.setStatus("RETURNED");
+        order.setFulfillmentSuggestionStatus("RETURNED");
+        order.setReverseReason(requireReason(reason));
+        order.setReturnedAt(java.time.Instant.now());
+        Order saved = orderRepository.save(order);
+        auditService.record("ORDER", "ORDER", saved.getId(), "RETURN_STOCK_IN", before, saved.getStatus(), saved.getReverseReason());
+        return saved;
+    }
+
+    /** 所有进入可发货的路径都必须在数据库层原子预留库存。 */
+    private void reserveStockIfReady(Order order) {
+        if (!"READY_TO_SHIP".equals(order.getStatus())) {
+            return;
+        }
+        if (!reserve(order)) {
+            order.setStatus("INSUFFICIENT_STOCK");
+            order.setFulfillmentSuggestionStatus("INSUFFICIENT_STOCK");
+            order.setPendingReason(null);
+        }
+    }
+
+    private boolean reserve(Order order) {
+        if (order.getReservedQuantity() != null && order.getReservedQuantity() == order.getQuantity()) {
+            return true;
+        }
+        if (inventoryRepository.reserveStockIfAvailable(order.getProduct().getId(), order.getQuantity()) == 0) {
+            return false;
+        }
+        order.setReservedQuantity(order.getQuantity());
+        movementService.record(order.getProduct().getId(), "ORDER_RESERVE",
+                0, order.getQuantity(), "ORDER", order.getId(), "订单进入可发货，预留库存");
+        return true;
+    }
+
+    private void releaseReservation(Order order, String reason) {
+        int quantity = order.getReservedQuantity() != null ? order.getReservedQuantity() : 0;
+        if (quantity <= 0) return;
+        if (inventoryRepository.releaseReservedStock(order.getProduct().getId(), quantity) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "库存预留记录异常，无法释放");
+        }
+        order.setReservedQuantity(0);
+        movementService.record(order.getProduct().getId(), "ORDER_RELEASE",
+                0, -quantity, "ORDER", order.getId(), reason);
+    }
+
+    private String requireReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "必须填写处理原因");
+        }
+        return reason.trim();
+    }
+
+    private Order lockOrder(Long id) {
+        return orderRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "订单不存在：" + id));
     }
 
     private static final String[] LOGISTICS = {"顺丰速运", "中通快递", "圆通速递", "韵达快递", "京东物流"};

@@ -23,10 +23,15 @@ public class InventoryController {
 
     private final InventoryRepository inventoryRepository;
     private final ProductRepository productRepository;
+    private final InventoryMovementRepository movementRepository;
+    private final InventoryMovementService movementService;
 
-    public InventoryController(InventoryRepository inventoryRepository, ProductRepository productRepository) {
+    public InventoryController(InventoryRepository inventoryRepository, ProductRepository productRepository,
+            InventoryMovementRepository movementRepository, InventoryMovementService movementService) {
         this.inventoryRepository = inventoryRepository;
         this.productRepository = productRepository;
+        this.movementRepository = movementRepository;
+        this.movementService = movementService;
     }
 
     @PostMapping
@@ -58,17 +63,39 @@ public class InventoryController {
 
     @PutMapping("/{id}")
     public InventoryResponse update(@PathVariable Long id, @RequestBody InventoryCreateRequest request) {
-        Inventory inventory = findInventory(id);
-        Product product = findProduct(request.productId());
-        apply(request, product, inventory);
-        return toResponse(inventoryRepository.save(inventory));
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                "库存不允许通用覆盖，请使用盘点调整或采购入库动作");
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                "库存是业务账目，不允许删除");
+    }
+
+    @PostMapping("/{id}/adjust")
+    public InventoryResponse adjust(@PathVariable Long id, @RequestBody InventoryAdjustmentRequest request) {
         Inventory inventory = findInventory(id);
-        inventoryRepository.delete(inventory);
-        return ResponseEntity.noContent().build();
+        if (request.newCurrentStock() == null || request.newCurrentStock() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "盘点后的实物库存必须大于等于 0");
+        }
+        if (request.reason() == null || request.reason().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "盘点调整必须填写原因");
+        }
+        int before = inventory.getCurrentStock();
+        if (inventoryRepository.adjustCurrentStock(inventory.getProduct().getId(), request.newCurrentStock()) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "调整后实物库存不能低于已预留库存");
+        }
+        movementService.record(inventory.getProduct().getId(), "MANUAL_ADJUST",
+                request.newCurrentStock() - before, 0, "INVENTORY", inventory.getId(), request.reason().trim());
+        return toResponse(findInventory(id));
+    }
+
+    @GetMapping("/{id}/movements")
+    public List<InventoryMovementResponse> movements(@PathVariable Long id) {
+        Inventory inventory = findInventory(id);
+        return movementRepository.findByProductIdOrderByCreatedAtDesc(inventory.getProduct().getId())
+                .stream().map(InventoryMovementResponse::from).toList();
     }
 
     private void apply(InventoryCreateRequest request, Product product, Inventory inventory) {
@@ -77,15 +104,15 @@ public class InventoryController {
         int currentStock = request.currentStock() != null ? request.currentStock() : 0;
         int safeThreshold = request.safeStockThreshold() != null ? request.safeStockThreshold() : 0;
         inventory.setCurrentStock(currentStock);
-        inventory.setReservedStock(request.reservedStock() != null ? request.reservedStock() : 0);
+        // 新建库存不能伪造已预留量；预留只能由订单状态机产生。
+        inventory.setReservedStock(0);
         inventory.setSafeStockThreshold(safeThreshold);
         inventory.setPurchaseCycleDays(request.purchaseCycleDays() != null ? request.purchaseCycleDays() : 0);
         inventory.setSalesLast7Days(request.salesLast7Days() != null ? request.salesLast7Days() : 0);
         // 状态未传则按 当前库存 < 安全阈值 推导 RISK / ENOUGH（须符合 ck_inventories_status 约束）
-        String status = request.inventoryStatus();
-        if (status == null || status.isBlank()) {
-            status = currentStock < safeThreshold ? "RISK" : "ENOUGH";
-        }
+        String status = currentStock < safeThreshold
+                ? "RISK"
+                : currentStock < safeThreshold * 2 ? "LOW" : "ENOUGH";
         inventory.setInventoryStatus(status);
     }
 

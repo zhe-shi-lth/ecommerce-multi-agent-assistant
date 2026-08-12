@@ -62,6 +62,7 @@ export default function NewListing() {
   const [imagePlan, setImagePlan] = usePersistState<Json | null>("nl:imagePlan", null);
   const [contentBrief, setContentBrief] = usePersistState<Json | null>("nl:contentBrief", null);
   const [planId, setPlanId] = usePersistState<number | null>("nl:planId", null); // 本次上架的运营计划 id
+  const [finalizeToken, setFinalizeToken] = usePersistState<string>("nl:finalizeToken", crypto.randomUUID());
 
   const [busy, setBusy] = useState(false); // 瞬态：生成/上架中
   const [exportMsg, setExportMsg] = useState<string | null>(null); // 导出文案反馈（瞬态）
@@ -144,12 +145,14 @@ export default function NewListing() {
     setTxt2imgRequirements("");
     setVideoRequirements("");
     setI2vRequirements("");
+    setVideoUrl(null);
     setVideoPhotos(null);
     setVideoPhotoSel(null);
     setCopyRequirements("");
     setImageRefine("");
     setGenPath(null);
     setPlanId(null);
+    setFinalizeToken(crypto.randomUUID());
     setPhase("upload");
   }
 
@@ -390,8 +393,11 @@ export default function NewListing() {
         content_brief: contentBrief,
         product_plan: productPlan,
         image_plan: imagePlan,
+        ...(videoUrl ? { video_url: videoUrl } : {}),
+        finalize_token: finalizeToken,
       });
-      setPlanId(res.operationPlanId ?? null);
+      if (!res.ok || !res.operationPlanId) throw new Error("运营计划落库失败");
+      setPlanId(res.operationPlanId);
       setPhase("done");
     } catch {
       /* error surfaced via global modal */
