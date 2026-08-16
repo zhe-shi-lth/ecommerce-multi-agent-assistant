@@ -26,6 +26,14 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "dev-service-key-change-me")
 SERVICE_HEADERS = {"X-Service-Key": SERVICE_API_KEY}
 
+def _service_headers() -> dict[str, str]:
+    from app.security import tenant_context
+    headers = dict(SERVICE_HEADERS)
+    context = tenant_context.get()
+    if context:
+        headers["X-Company-Id"], headers["X-Store-Id"] = map(str, context)
+    return headers
+
 
 class JavaApiClient:
     def __init__(
@@ -55,7 +63,7 @@ class JavaApiClient:
             "status": self._plan_status(result),
         }
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             op_id = resp.json().get("id")
             logger.info(
@@ -93,7 +101,7 @@ class JavaApiClient:
             "errorMessage": run.error_message,
         }
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             return resp.json().get("id")
         except httpx.HTTPError as e:
@@ -126,7 +134,7 @@ class JavaApiClient:
             "status": "DRAFT",
         }
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             pid = resp.json().get("id")
             logger.info("线1 商品已创建 Java (id={})", pid)
@@ -142,7 +150,7 @@ class JavaApiClient:
         """
         url = f"{self.base_url}/api/products/{product_id}"
         try:
-            resp = httpx.get(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.get(url, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             data = resp.json()
             logger.info("从 Java 获取商品 (id={}, name={})", product_id, data.get("name"))
@@ -155,7 +163,7 @@ class JavaApiClient:
         """拉取全部库存记录（Java /api/inventories），供线2 监控 Agent 使用。"""
         url = f"{self.base_url}/api/inventories"
         try:
-            resp = httpx.get(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.get(url, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError as e:
@@ -168,7 +176,7 @@ class JavaApiClient:
         if product_id is not None:
             url += f"?productId={product_id}"
         try:
-            resp = httpx.get(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.get(url, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError as e:
@@ -201,7 +209,7 @@ class JavaApiClient:
             "platform": platform,
         }
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             op_id = resp.json().get("id")
             logger.info("线1 运营计划已落库 Java (id={})", op_id)
@@ -220,7 +228,7 @@ class JavaApiClient:
     def get_operation_plan_by_trace(self, trace_id: str) -> Optional[dict]:
         url = f"{self.base_url}/api/operation-plans/by-trace/{trace_id}"
         try:
-            resp = httpx.get(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.get(url, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError:
@@ -230,7 +238,7 @@ class JavaApiClient:
         """线1上架确认后，将商品标记为已发布（PUBLISHED），仅已发布商品可被平台模拟拉单。"""
         url = f"{self.base_url}/api/products/{product_id}/publish"
         try:
-            resp = httpx.post(url, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             logger.info("商品已发布 (id={})", product_id)
             return True
@@ -266,7 +274,7 @@ class JavaApiClient:
             "platform": platform,
         }
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=SERVICE_HEADERS)
+            resp = httpx.post(url, json=payload, timeout=self.timeout, headers=_service_headers())
             resp.raise_for_status()
             op_id = resp.json().get("id")
             logger.info("线2 补货计划清单已落库 Java (id={}, product={})", op_id, product_id)

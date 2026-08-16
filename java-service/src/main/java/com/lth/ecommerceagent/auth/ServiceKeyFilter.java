@@ -36,8 +36,21 @@ public class ServiceKeyFilter extends OncePerRequestFilter {
         if (SecurityContextHolder.getContext().getAuthentication() == null) {
             String key = request.getHeader("X-Service-Key");
             if (key != null && !key.isBlank() && key.equals(serviceKey)) {
-                var auth = new UsernamePasswordAuthenticationToken(
-                        "service", null, List.of(new SimpleGrantedAuthority("ROLE_SERVICE")));
+                String companyHeader=request.getHeader("X-Company-Id");
+                String storeHeader=request.getHeader("X-Store-Id");
+                Object principal="service";
+                if(companyHeader!=null&&storeHeader!=null){
+                    principal=new com.lth.ecommerceagent.tenant.TenantPrincipal(null,"service","SERVICE",
+                            Long.valueOf(companyHeader),"SERVICE",Long.valueOf(storeHeader),"SERVICE",
+                            com.lth.ecommerceagent.tenant.MemberRole.OWNER,java.util.Set.of(com.lth.ecommerceagent.tenant.Permission.values()));
+                }
+                var authorities = new java.util.ArrayList<SimpleGrantedAuthority>();
+                authorities.add(new SimpleGrantedAuthority("ROLE_SERVICE"));
+                authorities.add(new SimpleGrantedAuthority("ROLE_OWNER"));
+                for (var permission : com.lth.ecommerceagent.tenant.Permission.values()) {
+                    authorities.add(new SimpleGrantedAuthority("PERM_" + permission.name()));
+                }
+                var auth = new UsernamePasswordAuthenticationToken(principal, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(auth);
             }
         }

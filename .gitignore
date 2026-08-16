@@ -7,3 +7,6 @@ __pycache__/
 python-agent-service/settings.json
 data/settings.json
 java-service/target/
+backups/
+frontend/test-results/
+frontend/playwright-report/

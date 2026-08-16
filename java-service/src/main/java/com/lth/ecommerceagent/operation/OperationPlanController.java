@@ -32,6 +32,9 @@ import com.lth.ecommerceagent.python.PythonPublishListingResult;
 import com.lth.ecommerceagent.listing.ProductListingService;
 import com.lth.ecommerceagent.media.MediaAssetService;
 import com.lth.ecommerceagent.audit.BusinessAuditService;
+import com.lth.ecommerceagent.platformtask.PlatformTask;
+import com.lth.ecommerceagent.platformtask.PlatformTaskService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.transaction.annotation.Transactional;
 
 @RestController
@@ -46,6 +49,8 @@ public class OperationPlanController {
     private final ProductListingService listingService;
     private final MediaAssetService mediaAssetService;
     private final BusinessAuditService auditService;
+    private final PlatformTaskService platformTaskService;
+    private final ObjectMapper objectMapper;
 
     public OperationPlanController(
             OperationPlanRepository operationPlanRepository,
@@ -55,7 +60,9 @@ public class OperationPlanController {
             PythonAgentClient pythonAgentClient,
             ProductListingService listingService,
             MediaAssetService mediaAssetService,
-            BusinessAuditService auditService) {
+            BusinessAuditService auditService,
+            PlatformTaskService platformTaskService,
+            ObjectMapper objectMapper) {
         this.operationPlanRepository = operationPlanRepository;
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
@@ -64,9 +71,12 @@ public class OperationPlanController {
         this.listingService = listingService;
         this.mediaAssetService = mediaAssetService;
         this.auditService = auditService;
+        this.platformTaskService = platformTaskService;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('OWNER') or hasAuthority('PERM_CONTENT_GENERATE')")
     public ResponseEntity<OperationPlanResponse> create(@RequestBody OperationPlanCreateRequest request) {
         Product product = findProduct(request.productId());
         Order order = request.orderId() != null ? findOrder(request.orderId()) : null;
@@ -183,6 +193,7 @@ public class OperationPlanController {
     }
 
     @PostMapping("/{id}/confirm")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('OWNER') or hasAuthority('PERM_CONTENT_REVIEW')")
     @Transactional
     public ResponseEntity<OperationPlanResponse> confirm(@PathVariable Long id) {
         OperationPlan plan = findPlanForUpdate(id);
@@ -235,10 +246,23 @@ public class OperationPlanController {
                     .body(toResponse(plan, false, auditMessage));
         }
 
+        PythonPublishListingRequest publishRequest = PythonPublishListingRequest.from(plan);
+        PlatformTask platformTask = platformTaskService.begin(
+                "PUBLISH:OPERATION_PLAN:" + plan.getId(), "PUBLISH", "OPERATION_PLAN",
+                plan.getId(), plan.getPlatform(), objectMapper.convertValue(publishRequest, Map.class));
+        if ("COMPLETED".equals(platformTask.getStatus())) {
+            return ResponseEntity.ok(toResponse(plan, true, "该计划已发布，无需重复操作"));
+        }
         PythonPublishListingResult publishResult;
         try {
-            publishResult = pythonAgentClient.publishListing(PythonPublishListingRequest.from(plan));
+            if ("EXTERNAL_SUCCEEDED".equals(platformTask.getStatus())) {
+                publishResult = objectMapper.convertValue(platformTask.getResponseJson(), PythonPublishListingResult.class);
+            } else {
+                platformTaskService.markRunning(platformTask.getId());
+                publishResult = pythonAgentClient.publishListing(publishRequest);
+            }
         } catch (PythonAgentException e) {
+            platformTaskService.failed(platformTask.getId(), e.getMessage());
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(toResponse(plan, false, "平台发布失败：" + e.getMessage()));
         }
@@ -246,21 +270,32 @@ public class OperationPlanController {
             String message = publishResult.message() == null || publishResult.message().isBlank()
                     ? "平台发布失败：未返回成功状态"
                     : "平台发布失败：" + publishResult.message();
+            platformTaskService.failed(platformTask.getId(), message);
             return ResponseEntity.status(HttpStatus.CONFLICT).body(toResponse(plan, false, message));
         }
-
-        plan.setProductPlanJson(withPublishResult(plan.getProductPlanJson(), publishResult));
-        plan.setConfirmationStatus("CONFIRMED");
-        plan.setConfirmedAt(Instant.now());
-        OperationPlan saved = operationPlanRepository.save(plan);
-        mediaAssetService.registerPlanAssets(saved);
-        listingService.publish(saved, publishResult);
-        auditService.record("OPERATION", "OPERATION_PLAN", saved.getId(), "PUBLISH",
-                "PENDING", "CONFIRMED", "平台：" + saved.getPlatform() + "，外部商品：" + publishResult.externalItemId());
-        return ResponseEntity.ok(toResponse(saved, true, "平台发布成功：" + publishResult.message()));
+        if (!"EXTERNAL_SUCCEEDED".equals(platformTask.getStatus())) {
+            platformTaskService.externalSucceeded(platformTask.getId(), objectMapper.convertValue(publishResult, Map.class));
+        }
+        try {
+            plan.setProductPlanJson(withPublishResult(plan.getProductPlanJson(), publishResult));
+            plan.setConfirmationStatus("CONFIRMED");
+            plan.setConfirmedAt(Instant.now());
+            OperationPlan saved = operationPlanRepository.save(plan);
+            mediaAssetService.registerPlanAssets(saved);
+            listingService.publish(saved, publishResult);
+            auditService.record("OPERATION", "OPERATION_PLAN", saved.getId(), "PUBLISH",
+                    "PENDING", "CONFIRMED", "平台：" + saved.getPlatform() + "，外部商品：" + publishResult.externalItemId());
+            platformTaskService.completeAfterCommit(platformTask.getId(),
+                    "Platform publish succeeded but the local transaction rolled back");
+            return ResponseEntity.ok(toResponse(saved, true, "平台发布成功：" + publishResult.message()));
+        } catch (RuntimeException e) {
+            platformTaskService.needsReconciliation(platformTask.getId(), "平台已发布，本地落库失败：" + e.getMessage());
+            throw e;
+        }
     }
 
     @PostMapping("/{id}/reject")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('OWNER') or hasAuthority('PERM_CONTENT_REVIEW')")
     @Transactional
     public OperationPlanResponse reject(@PathVariable Long id) {
         OperationPlan plan = findPlanForUpdate(id);
@@ -277,6 +312,7 @@ public class OperationPlanController {
 
     // 下架：仅已发布（CONFIRMED）的计划可下架。撤回商品发布状态 + 计划回到待审核，记录保留、可逆。
     @PostMapping("/{id}/unpublish")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('OWNER') or hasAuthority('PERM_CONTENT_PUBLISH')")
     @Transactional
     public ResponseEntity<OperationPlanResponse> unpublish(@PathVariable Long id) {
         OperationPlan plan = findPlanForUpdate(id);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { getSettings, saveSettings } from "../api/settings";
+import Select from "../components/Select";
+import { getSettings, getStorePlatformConfigs, saveSettings, saveStorePlatformConfig } from "../api/settings";
 import { getCatalog, type ModelCatalog } from "../api/catalog";
 import type { Json } from "../api/types";
 import { PLATFORMS } from "../platforms";
@@ -18,6 +19,7 @@ interface CardSettings {
 
 // 平台对接凭证：一个平台一份，字段与后端 settings_store._PLATFORM_API_FIELDS 对齐。
 interface PlatformApiSettings {
+  configured: boolean;
   enabled: boolean;
   app_key: string;
   app_secret: string;
@@ -112,6 +114,7 @@ function normalize(raw: Json): Settings {
         return [
           p.key,
           {
+            configured: false,
             enabled: bool(b.enabled, false),
             app_key: str(b.app_key),
             app_secret: str(b.app_secret),
@@ -137,8 +140,8 @@ export default function Settings() {
   const [tab, setTab] = useState<"listing" | "monitor" | "platform">("listing");
 
   useEffect(() => {
-    getSettings()
-      .then((r) => setSettings(normalize(r)))
+    Promise.all([getSettings(),getStorePlatformConfigs()])
+      .then(([r,configs]) => {const next=normalize(r);for(const config of configs){if(next.platform_api[config.platform]){next.platform_api[config.platform].enabled=config.enabled;next.platform_api[config.platform].configured=config.configured;}}setSettings(next)})
       .catch((e) => setError(String(e)));
     getCatalog()
       .then(setCatalog)
@@ -208,7 +211,14 @@ export default function Settings() {
     setError(null);
     setSaved(false);
     try {
-      await saveSettings(settings as unknown as Json);
+      const { platform_api: _, ...modelSettings } = settings;
+      await saveSettings(modelSettings as unknown as Json);
+      if (tab === "platform") {
+        await Promise.all(Object.entries(settings.platform_api).map(([platform, value]) => {
+          const credentials=Object.fromEntries(Object.entries(value).filter(([key,v])=>key!=="enabled"&&typeof v==="string"&&v.trim()).map(([key,v])=>[key,(v as string).trim()]));
+          return {platform,value,credentials};
+        }).filter(({value,credentials})=>value.configured||value.enabled||Object.keys(credentials).length>0).map(({platform,value,credentials})=>saveStorePlatformConfig(platform,credentials,value.enabled)));
+      }
       setSaved(true);
     } catch (e) {
       setError(String(e));
@@ -240,13 +250,13 @@ export default function Settings() {
       <>
         <div className="field" style={{ marginBottom: 12 }}>
           <span>厂家</span>
-          <select value={g.vendor} onChange={(e) => onVendorChange(group, e.target.value)}>
+          <Select value={g.vendor} onChange={(e) => onVendorChange(group, e.target.value)}>
             {vendorOptions(group).map((v) => (
               <option key={v.key} value={v.key}>
                 {v.label}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
 
         <div className="field" style={{ marginBottom: 12 }}>
@@ -258,13 +268,13 @@ export default function Settings() {
               onChange={(e) => onModelChange(group, e.target.value)}
             />
           ) : (
-            <select value={g.model} onChange={(e) => onModelChange(group, e.target.value)}>
+            <Select value={g.model} onChange={(e) => onModelChange(group, e.target.value)}>
               {models.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
         </div>
 

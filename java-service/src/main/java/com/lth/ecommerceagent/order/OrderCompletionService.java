@@ -19,6 +19,9 @@ import com.lth.ecommerceagent.python.PythonOrderFulfillmentRequest;
 import com.lth.ecommerceagent.python.PythonShipRequest;
 import com.lth.ecommerceagent.python.PythonShipResult;
 import com.lth.ecommerceagent.sales.SalesRecordingService;
+import com.lth.ecommerceagent.platformtask.PlatformTask;
+import com.lth.ecommerceagent.platformtask.PlatformTaskService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * 地址补全的落库与履约状态推导（单一真相源）。
@@ -36,6 +39,8 @@ public class OrderCompletionService {
     private final BusinessAuditService auditService;
     private final InventoryMovementService movementService;
     private final SalesRecordingService salesRecordingService;
+    private final PlatformTaskService platformTaskService;
+    private final ObjectMapper objectMapper;
 
     public OrderCompletionService(
             OrderRepository orderRepository,
@@ -43,13 +48,17 @@ public class OrderCompletionService {
             PythonAgentClient pythonAgentClient,
             BusinessAuditService auditService,
             InventoryMovementService movementService,
-            SalesRecordingService salesRecordingService) {
+            SalesRecordingService salesRecordingService,
+            PlatformTaskService platformTaskService,
+            ObjectMapper objectMapper) {
         this.orderRepository = orderRepository;
         this.inventoryRepository = inventoryRepository;
         this.pythonAgentClient = pythonAgentClient;
         this.auditService = auditService;
         this.movementService = movementService;
         this.salesRecordingService = salesRecordingService;
+        this.platformTaskService = platformTaskService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -367,7 +376,17 @@ public class OrderCompletionService {
         try {
             PythonShipRequest pyReq = new PythonShipRequest(
                     order.getPlatform(), order.getPlatformOrderId(), logistics, waybill);
-            PythonShipResult result = pythonAgentClient.shipOrder(pyReq);
+            PlatformTask platformTask = platformTaskService.begin(
+                    "SHIP:ORDER:" + order.getId(), "SHIP", "ORDER", order.getId(),
+                    order.getPlatform(), objectMapper.convertValue(request, java.util.Map.class));
+            if ("COMPLETED".equals(platformTask.getStatus())) return order;
+            PythonShipResult result;
+            if ("EXTERNAL_SUCCEEDED".equals(platformTask.getStatus())) {
+                result = objectMapper.convertValue(platformTask.getResponseJson(), PythonShipResult.class);
+            } else {
+                platformTaskService.markRunning(platformTask.getId());
+                result = pythonAgentClient.shipOrder(pyReq);
+            }
             if (Boolean.FALSE.equals(result.success())) {
                 // 平台拒绝受理：保留在待重试态，记录原因，不发货。
                 order.setStatus("SHIPPING_FAILED");
@@ -376,7 +395,11 @@ public class OrderCompletionService {
                 Order saved = orderRepository.save(order);
                 auditService.record("ORDER", "ORDER", saved.getId(), "SHIP_FAILED",
                         before, saved.getStatus(), saved.getPendingReason());
+                platformTaskService.failed(platformTask.getId(), saved.getPendingReason());
                 return saved;
+            }
+            if (!"EXTERNAL_SUCCEEDED".equals(platformTask.getStatus())) {
+                platformTaskService.externalSucceeded(platformTask.getId(), objectMapper.convertValue(result, java.util.Map.class));
             }
             if (order.getReservedQuantity() == null || order.getReservedQuantity() != order.getQuantity()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "订单没有完整库存预留，无法发货，请重新判定库存");
@@ -413,6 +436,8 @@ public class OrderCompletionService {
             Order saved = orderRepository.save(order);
             auditService.record("ORDER", "ORDER", saved.getId(), "SHIP",
                     before, saved.getStatus(), "物流：" + logistics + "，运单号：" + waybill);
+            platformTaskService.completeAfterCommit(platformTask.getId(),
+                    "Platform shipment succeeded but the local transaction rolled back");
             return saved;
         } catch (PythonAgentException e) {
             // 平台发货服务调用失败（如未启动）：同样落 SHIPPING_FAILED 待重试，不让前端静默成功。
@@ -422,7 +447,15 @@ public class OrderCompletionService {
             Order saved = orderRepository.save(order);
             auditService.record("ORDER", "ORDER", saved.getId(), "SHIP_FAILED",
                     before, saved.getStatus(), saved.getPendingReason());
+            PlatformTask task = platformTaskService.findByKey("SHIP:ORDER:" + order.getId());
+            if (task != null) platformTaskService.failed(task.getId(), e.getMessage());
             return saved;
+        } catch (RuntimeException e) {
+            PlatformTask task = platformTaskService.findByKey("SHIP:ORDER:" + order.getId());
+            if (task != null && "EXTERNAL_SUCCEEDED".equals(task.getStatus())) {
+                platformTaskService.needsReconciliation(task.getId(), "平台已发货，本地落库失败：" + e.getMessage());
+            }
+            throw e;
         }
     }
 

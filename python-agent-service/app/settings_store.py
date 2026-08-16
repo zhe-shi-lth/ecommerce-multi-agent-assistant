@@ -16,6 +16,9 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import os
+import base64
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +28,73 @@ from app import model_catalog
 # 存到仓库根的 data/ 下，刻意放在 python-agent-service 源码树之外——
 # 否则 fastapi dev 的 --reload 监听会把它当成源码变更，保存设置时反复重启服务。
 SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "settings.json"
+_SECRET_FIELDS = {"api_key", "app_secret", "access_token"}
+MASKED_SECRET = "********"
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+    secret = os.getenv("SETTINGS_ENCRYPTION_KEY") or os.getenv("JWT_SECRET", "dev-jwt-secret-change-me")
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _walk_secrets(value: Any, transform) -> Any:
+    if isinstance(value, dict):
+        return {k: transform(v) if k in _SECRET_FIELDS and isinstance(v, str) else _walk_secrets(v, transform) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_walk_secrets(v, transform) for v in value]
+    return value
+
+
+def _encrypt_secret(value: str) -> str:
+    if not value or value.startswith("enc:v1:"):
+        return value
+    return "enc:v1:" + _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def _decrypt_secret(value: str) -> str:
+    if not value.startswith("enc:v1:"):
+        return value
+    try:
+        return _fernet().decrypt(value[7:].encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise RuntimeError("设置凭证无法解密，请确认 SETTINGS_ENCRYPTION_KEY 未发生变化") from exc
+
+
+def _has_plaintext_secret(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            (key in _SECRET_FIELDS and isinstance(item, str) and bool(item) and not item.startswith("enc:v1:"))
+            or _has_plaintext_secret(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_plaintext_secret(item) for item in value)
+    return False
+
+
+def _persist(settings: dict[str, Any]) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(
+        json.dumps(_walk_secrets(settings, _encrypt_secret), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def public_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    return _walk_secrets(copy.deepcopy(settings), lambda v: MASKED_SECRET if v else "")
+
+
+def merge_masked_secrets(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    def merge(base, incoming):
+        if not isinstance(base, dict) or not isinstance(incoming, dict): return incoming
+        result=dict(incoming)
+        for k,v in incoming.items():
+            if k in _SECRET_FIELDS and v == MASKED_SECRET: result[k]=base.get(k,"")
+            elif isinstance(v,dict): result[k]=merge(base.get(k,{}),v)
+        return result
+    return merge(current,patch)
 
 # 订单来源平台（与前端 frontend/src/platforms.ts、Java orders.platform 保持一致）。
 PLATFORM_KEYS = ("taobao", "douyin", "xiaohongshu")
@@ -91,7 +161,23 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 # 可重入锁：save_settings 持锁期间会调用 load_settings（同样取锁），
 # 必须用 RLock，否则普通 Lock 会死锁导致请求挂起（PUT 一直 000）。
 _lock = threading.RLock()
+_cache_by_scope: dict[str, dict[str, Any]] = {}
+# Backward-compatible invalidation hook used by the existing test fixture and
+# older in-process callers. Tenant-aware code uses _cache_by_scope.
 _cache: dict[str, Any] | None = None
+
+def _scope() -> tuple[str, Path]:
+    """AI 设置按企业保存；平台授权不在此处保存，而由 Java 按店铺管理。"""
+    try:
+        from app.security import tenant_context
+        context = tenant_context.get()
+    except Exception:
+        context = None
+    if context:
+        company_id, _store_id = context
+        key = f"company-{company_id}"
+        return key, SETTINGS_PATH.with_name(f"settings-{key}.json")
+    return "platform", SETTINGS_PATH
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -159,18 +245,38 @@ def _normalize(data: dict) -> dict:
 
 def load_settings() -> dict[str, Any]:
     """返回当前设置（带缓存）；首次读取时与 settings.json 合并默认值并规整。"""
-    global _cache
     with _lock:
-        if _cache is not None:
+        global _cache
+        if _cache is None and _cache_by_scope:
+            _cache_by_scope.clear()
+        key, path = _scope()
+        if key in _cache_by_scope:
+            _cache = _cache_by_scope[key]
             return _cache
         data = copy.deepcopy(DEFAULT_SETTINGS)
-        if SETTINGS_PATH.exists():
+        migrate_plaintext = False
+        migration_source: Path | None = None
+        if not path.exists() and key.startswith("company-"):
+            # Earlier builds wrote one AI settings file per company/store. Move
+            # the first legacy file into the company-level file on first access.
+            legacy = sorted(path.parent.glob(f"settings-{key}-store-*.json"))
+            if legacy:
+                migration_source = legacy[0]
+                path = migration_source
+        if path.exists():
             try:
-                user = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                raw_user = json.loads(path.read_text(encoding="utf-8"))
+                migrate_plaintext = _has_plaintext_secret(raw_user)
+                user = _walk_secrets(raw_user, _decrypt_secret)
                 data = _deep_merge(copy.deepcopy(DEFAULT_SETTINGS), user)
-            except Exception:
-                data = copy.deepcopy(DEFAULT_SETTINGS)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("settings.json is not valid JSON") from exc
         data = _normalize(data)
+        if migration_source is not None or migrate_plaintext:
+            target = SETTINGS_PATH.with_name(f"settings-{key}.json") if key.startswith("company-") else SETTINGS_PATH
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(_walk_secrets(data, _encrypt_secret), ensure_ascii=False, indent=2), encoding="utf-8")
+        _cache_by_scope[key] = data
         _cache = data
         return data
 
@@ -181,14 +287,15 @@ def get_settings() -> dict[str, Any]:
 
 def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
     """合并补丁并持久化；清 LLM 客户端缓存，使厂家/模型切换即时生效。"""
-    global _cache
     with _lock:
-        data = _deep_merge(load_settings(), patch)
+        global _cache
+        key, path = _scope()
+        current = load_settings()
+        data = _deep_merge(current, merge_masked_secrets(current, patch))
         data = _normalize(data)
-        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_walk_secrets(data, _encrypt_secret), ensure_ascii=False, indent=2), encoding="utf-8")
+        _cache_by_scope[key] = data
         _cache = data
     # 通知 LLM 客户端：设置变了，下次生成重新构造（应用新厂家/模型）
     try:

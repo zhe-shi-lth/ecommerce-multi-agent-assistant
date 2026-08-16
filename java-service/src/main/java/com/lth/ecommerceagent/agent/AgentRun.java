@@ -21,6 +21,10 @@ import org.hibernate.type.SqlTypes;
 @Entity
 @Table(name = "agent_runs")
 public class AgentRun {
+    @Column(name="company_id", nullable=false) private Long companyId;
+    @Column(name="store_id", nullable=false) private Long storeId;
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;}
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

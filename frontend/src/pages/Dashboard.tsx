@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Select from "../components/Select";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getOperationPlans, listDailySales } from "../api/operations";
 import { getInventories } from "../api/inventories";
 import { getProducts } from "../api/products";
-import { getInventoryWarnings, generateRestockPlans } from "../api/line2";
+import { getInventoryWarnings } from "../api/line2";
 import { getCapabilities } from "../api/settings";
 import { getInsufficientSummary, recheckProductOrders } from "../api/orders";
 import { Icon } from "../components/icons";
@@ -14,17 +15,33 @@ import PageHeader from "../components/PageHeader";
 import { errMsg } from "../utils/errMsg";
 
 type Metric = "revenue" | "units";
+type Period = "day" | "week" | "month" | "year";
 
-// 把日销明细按日期聚合为折线图数据；metric 决定取营业额还是销量。
-function buildSeries(rows: DailySales[], metric: Metric) {
-  const byDate = new Map<string, number>();
+// 把日销明细按日期聚合为折线图数据；metric 决定取营业额还是销量，period 决定时间粒度。
+function bucketOf(saleDate: string, period: Period): { key: string; label: string } {
+  const [y, m, d] = saleDate.split("-").map(Number);
+  if (period === "day") return { key: saleDate, label: saleDate.slice(5) };
+  if (period === "month") return { key: `${y}-${String(m).padStart(2, "0")}`, label: `${y}-${String(m).padStart(2, "0")}` };
+  if (period === "year") return { key: String(y), label: String(y) };
+  // 按周聚合：以周一为每周起点。
+  const dow = (new Date(y, m - 1, d).getDay() + 6) % 7; // 0 = 周一
+  const monday = new Date(y, m - 1, d - dow);
+  const wk = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+  return { key: wk, label: wk.slice(5) };
+}
+
+function buildSeries(rows: DailySales[], metric: Metric, period: Period = "day") {
+  const buckets = new Map<string, { key: string; label: string; value: number }>();
   for (const s of rows) {
+    const { key, label } = bucketOf(s.saleDate, period);
     const v = metric === "revenue" ? Number(s.revenue) : Number(s.units);
-    byDate.set(s.saleDate, (byDate.get(s.saleDate) ?? 0) + v);
+    const cur = buckets.get(key);
+    if (cur) cur.value += v;
+    else buckets.set(key, { key, label, value: v });
   }
-  return [...byDate.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([label, value]) => ({ label, value }));
+  return [...buckets.values()]
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map((b) => ({ label: b.label, value: b.value }));
 }
 
 export default function Dashboard() {
@@ -48,15 +65,16 @@ export default function Dashboard() {
   const [monitorAvailable, setMonitorAvailable] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
   const [restockMsg, setRestockMsg] = useState<string | null>(null);
   const [restockingId, setRestockingId] = useState<number | null>(null);
 
-  // 销售趋势板块：下拉切换 营业额 / 销量
+  // 销售趋势板块：下拉切换 营业额 / 销量；以及时间粒度（日/周/月/年）
   const [trendMetric, setTrendMetric] = useState<Metric>("revenue");
-  // 单品分析板块：双下拉（商品 + 指标）
+  const [trendPeriod, setTrendPeriod] = useState<Period>("day");
+  // 单品分析板块：三下拉（商品 + 指标 + 时间粒度）
   const [singleProductId, setSingleProductId] = useState<string>("");
   const [singleMetric, setSingleMetric] = useState<Metric>("revenue");
+  const [singlePeriod, setSinglePeriod] = useState<Period>("day");
   // 平台筛选：影响大盘 KPI、销售趋势、单品分析（库存类看板为商品级、保持全平台）
   const [platform, setPlatform] = useState<string>("ALL");
 
@@ -107,29 +125,6 @@ export default function Dashboard() {
     return p ? p.name : `#${id}`;
   }
 
-  async function handleGenerateRestock() {
-    setGenerating(true);
-    setRestockMsg(null);
-    try {
-      const res = await generateRestockPlans();
-      const { generated, failed } = res;
-      if (generated > 0) {
-        setRestockMsg(
-          `已生成 ${generated} 条补货计划清单，可在「运营计划」中查看并审核。` +
-            (failed.length > 0 ? `（${failed.length} 条落库失败）` : "")
-        );
-      } else if (failed.length > 0) {
-        setRestockMsg(`已生成补货清单，但其中 ${failed.length} 条保存失败，请稍后重试或联系管理员。`);
-      } else {
-        setRestockMsg("当前预警商品无需补货（已按安全库存覆盖），未生成清单。");
-      }
-    } catch (e) {
-      setRestockMsg(`生成失败：${errMsg(e)}`);
-    } finally {
-      setGenerating(false);
-    }
-  }
-
   // 单商品「状态刷新」：补货完成后重算该商品库存不足订单状态（不改动库存），刷新汇总与水位。
   async function handleRecheckProduct(productId: number) {
     setRestockingId(productId);
@@ -171,14 +166,14 @@ export default function Dashboard() {
     [platformSales]
   );
 
-  const trendSeries = useMemo(() => buildSeries(platformSales, trendMetric), [platformSales, trendMetric]);
+  const trendSeries = useMemo(() => buildSeries(platformSales, trendMetric, trendPeriod), [platformSales, trendMetric, trendPeriod]);
   const singleRows = useMemo(
     () => (singleProductId ? platformSales.filter((s) => s.productId === Number(singleProductId)) : []),
     [platformSales, singleProductId]
   );
   const singleSeries = useMemo(
-    () => buildSeries(singleRows, singleMetric),
-    [singleRows, singleMetric]
+    () => buildSeries(singleRows, singleMetric, singlePeriod),
+    [singleRows, singleMetric, singlePeriod]
   );
 
   if (loading)
@@ -201,7 +196,7 @@ export default function Dashboard() {
       <div className="filter-bar" style={{ marginTop: 4 }}>
         <div className="filter-item">
           <label className="filter-label">平台</label>
-          <select
+          <Select
             className="header-select"
             value={platform}
             onChange={(e) => setPlatform(e.target.value)}
@@ -212,7 +207,7 @@ export default function Dashboard() {
                 {p.label}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         {platform !== "ALL" && (
           <span className="muted" style={{ alignSelf: "flex-end" }}>
@@ -259,161 +254,177 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* 销售趋势：日营业额 / 日销量 合并为一个板块，下拉切换 */}
-      <div className="card">
-        <div className="card-header">
-          <h3>销售趋势</h3>
-          <select
-            className="header-select"
-            value={trendMetric}
-            onChange={(e) => setTrendMetric(e.target.value as Metric)}
-          >
-            <option value="revenue">营业额</option>
-            <option value="units">销量</option>
-          </select>
-        </div>
-        <LineChart data={trendSeries} />
-      </div>
-
-      {/* 单品分析：双下拉（商品 + 指标） */}
-      <div className="card">
-        <div className="card-header">
-          <h3>单品分析</h3>
-          <div className="header-selects">
-            <select
-              className="header-select"
-              value={singleProductId}
-              onChange={(e) => setSingleProductId(e.target.value)}
-            >
-              <option value="">选择商品</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  #{p.id} {p.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="header-select"
-              value={singleMetric}
-              onChange={(e) => setSingleMetric(e.target.value as Metric)}
-            >
-              <option value="revenue">营业额</option>
-              <option value="units">销量</option>
-            </select>
-          </div>
-        </div>
-        {singleProductId ? (
-          <LineChart data={singleSeries} />
-        ) : (
-          <p className="muted">请选择商品，查看其单品销售趋势。</p>
-        )}
-      </div>
-
-      {/* 警告板块：可选大模型，独立加载，降级不阻塞面板 */}
-      <div className="card">
-        <div className="card-header">
-          <h3>库存预警</h3>
-          <span
-            className={`badge ${monitorAvailable ? "badge-info" : "badge-warn"}`}
-            title={
-              monitorAvailable === null
-                ? "正在检测监控大模型能力…"
-                : monitorAvailable
-                ? "已启用监控大模型：预警含未来事件智能判断"
-                : "未启用监控大模型：按可售天数 < 5 天红线预警"
-            }
-          >
-            {monitorAvailable === null
-              ? "检测中…"
-              : monitorAvailable
-              ? "智能预警"
-              : "红线模式"}
-          </span>
-          {warnings.length > 0 && (
-            <button
-              className="btn btn-primary"
-              onClick={handleGenerateRestock}
-              disabled={generating}
-              title="对当前所有预警商品生成补货计划清单并落库"
-            >
-              {generating ? "生成中…" : "生成补货清单"}
-            </button>
-          )}
-        </div>
-        {warnLoading ? (
-          <div className="loading-inline">
-            <span className="spinner" />
-            预警加载中…
-          </div>
-        ) : warnError ? (
-          <div className="notice notice-error">
-            预警加载失败（已降级，面板数据不受影响）：{warnError}
-          </div>
-        ) : warnings.length > 0 ? (
-          <div className="notice notice-warn">
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>库存预警（可售天数 &lt; 5 天）</div>
-            {warnings.map((w) => (
-              <div key={w.productId} style={{ marginBottom: 6 }}>
-                <strong>{w.productName}</strong>
-                {w.sellableDays != null && <span> · 可售约 {w.sellableDays} 天</span>}
-                {w.activeEvents.length > 0 && <span> · 事件：{w.activeEvents.join("、")}</span>}
-                <div className="muted" style={{ marginTop: 2 }}>{w.warnings.join("；")}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">暂无库存预警 🎉</p>
-        )}
-        {restockMsg && (
-          <div className="notice notice-info" style={{ marginTop: 8 }}>{restockMsg}</div>
-        )}
-      </div>
-
-      {/* 库存不足订单：按商品汇总积压与缺口，从订单详情跳转时高亮对应商品 */}
-      {insufficient.length > 0 && (
+      <div className="bento-row">
+        {/* 销售趋势：日营业额 / 日销量 合并为一个板块，下拉切换 */}
         <div className="card">
           <div className="card-header">
-            <h3>库存不足订单</h3>
-            <span className="badge badge-bad">需补货</span>
+            <h3>销售趋势</h3>
+            <div className="header-selects">
+              <Select
+                className="header-select"
+                value={trendPeriod}
+                onChange={(e) => setTrendPeriod(e.target.value as Period)}
+              >
+                <option value="day">按日</option>
+                <option value="week">按周</option>
+                <option value="month">按月</option>
+                <option value="year">按年</option>
+              </Select>
+              <Select
+                className="header-select"
+                value={trendMetric}
+                onChange={(e) => setTrendMetric(e.target.value as Metric)}
+              >
+                <option value="revenue">营业额</option>
+                <option value="units">销量</option>
+              </Select>
+            </div>
           </div>
-          <div className="notice notice-error" style={{ marginTop: 4 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>以下商品有订单因库存不足挂起</div>
-            {insufficient.map((s) => {
-              const focused = focusedProduct === s.productId;
-              return (
-                <div
-                  key={s.productId}
-                  ref={(el) => {
-                    rowRefs.current[s.productId] = el;
-                  }}
-                  style={{
-                    marginBottom: 8,
-                    padding: focused ? "8px 10px" : undefined,
-                    borderRadius: 8,
-                    border: focused ? "1px solid #e5484d" : undefined,
-                    background: focused ? "#e5484d0f" : undefined,
-                  }}
-                >
-                  <strong>{s.productName}</strong>
-                  <span> · 积压 {s.orderCount} 笔订单、{s.backlogQuantity} 件</span>
-                  <div className="muted" style={{ marginTop: 2 }}>
-                    商品当前库存 {s.currentStock} 件，共缺 {s.shortQuantity} 件（补货后点下方刷新状态）
-                  </div>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    style={{ marginTop: 6 }}
-                    onClick={() => handleRecheckProduct(s.productId)}
-                    disabled={restockingId === s.productId}
-                  >
-                    {restockingId === s.productId ? <span className="spinner" /> : <Icon name="refresh" />}
-                    刷新状态
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+          <LineChart data={trendSeries} unit={trendMetric === "revenue" ? "元" : "件"} />
         </div>
-      )}
+
+        {/* 单品分析：双下拉（商品 + 指标） */}
+        <div className="card">
+          <div className="card-header">
+            <h3>单品分析</h3>
+            <div className="header-selects">
+              <Select
+                className="header-select"
+                value={singleProductId}
+                onChange={(e) => setSingleProductId(e.target.value)}
+              >
+                <option value="">选择商品</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    #{p.id} {p.name}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                className="header-select"
+                value={singlePeriod}
+                onChange={(e) => setSinglePeriod(e.target.value as Period)}
+              >
+                <option value="day">按日</option>
+                <option value="week">按周</option>
+                <option value="month">按月</option>
+                <option value="year">按年</option>
+              </Select>
+              <Select
+                className="header-select"
+                value={singleMetric}
+                onChange={(e) => setSingleMetric(e.target.value as Metric)}
+              >
+                <option value="revenue">营业额</option>
+                <option value="units">销量</option>
+              </Select>
+            </div>
+          </div>
+          {singleProductId ? (
+            <LineChart data={singleSeries} unit={singleMetric === "revenue" ? "元" : "件"} />
+          ) : (
+            <p className="muted">请选择商品，查看其单品销售趋势。</p>
+          )}
+        </div>
+      </div>
+
+      <div className="bento-row">
+        {/* 警告板块：可选大模型，独立加载，降级不阻塞面板 */}
+        <div className="card">
+          <div className="card-header">
+            <h3>库存预警</h3>
+            <span
+              className={`badge ${monitorAvailable ? "badge-info" : "badge-warn"}`}
+              title={
+                monitorAvailable === null
+                  ? "正在检测监控大模型能力…"
+                  : monitorAvailable
+                  ? "已启用监控大模型：预警含未来事件智能判断"
+                  : "未启用监控大模型：按可售天数 < 5 天红线预警"
+              }
+            >
+              {monitorAvailable === null
+                ? "检测中…"
+                : monitorAvailable
+                ? "智能预警"
+                : "红线模式"}
+            </span>
+          </div>
+          {warnLoading ? (
+            <div className="loading-inline">
+              <span className="spinner" />
+              预警加载中…
+            </div>
+          ) : warnError ? (
+            <div className="notice notice-error">
+              预警加载失败（已降级，面板数据不受影响）：{warnError}
+            </div>
+          ) : warnings.length > 0 ? (
+            <div className="notice notice-warn">
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>库存预警（可售天数 &lt; 5 天）</div>
+              {warnings.map((w) => (
+                <div key={w.productId} style={{ marginBottom: 6 }}>
+                  <strong>{w.productName}</strong>
+                  {w.sellableDays != null && <span> · 可售约 {w.sellableDays} 天</span>}
+                  {w.activeEvents.length > 0 && <span> · 事件：{w.activeEvents.join("、")}</span>}
+                  <div className="muted" style={{ marginTop: 2 }}>{w.warnings.join("；")}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">暂无库存预警 🎉</p>
+          )}
+          {restockMsg && (
+            <div className="notice notice-info" style={{ marginTop: 8 }}>{restockMsg}</div>
+          )}
+        </div>
+
+        {/* 库存不足订单：按商品汇总积压与缺口，从订单详情跳转时高亮对应商品 */}
+        {insufficient.length > 0 && (
+          <div className="card">
+            <div className="card-header">
+              <h3>库存不足订单</h3>
+              <span className="badge badge-bad">需补货</span>
+            </div>
+            <div className="notice notice-error" style={{ marginTop: 4 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>以下商品有订单因库存不足挂起</div>
+              {insufficient.map((s) => {
+                const focused = focusedProduct === s.productId;
+                return (
+                  <div
+                    key={s.productId}
+                    ref={(el) => {
+                      rowRefs.current[s.productId] = el;
+                    }}
+                    style={{
+                      marginBottom: 8,
+                      padding: focused ? "8px 10px" : undefined,
+                      borderRadius: 8,
+                      border: focused ? "1px solid #e5484d" : undefined,
+                      background: focused ? "#e5484d0f" : undefined,
+                    }}
+                  >
+                    <strong>{s.productName}</strong>
+                    <span> · 积压 {s.orderCount} 笔订单、{s.backlogQuantity} 件</span>
+                    <div className="muted" style={{ marginTop: 2 }}>
+                      商品当前库存 {s.currentStock} 件，共缺 {s.shortQuantity} 件（补货后点下方刷新状态）
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      style={{ marginTop: 6 }}
+                      onClick={() => handleRecheckProduct(s.productId)}
+                      disabled={restockingId === s.productId}
+                    >
+                      {restockingId === s.productId ? <span className="spinner" /> : <Icon name="refresh" />}
+                      刷新状态
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <div className="card-header">

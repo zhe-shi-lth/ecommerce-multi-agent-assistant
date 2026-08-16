@@ -33,6 +33,14 @@ public class PythonAgentClient {
     private final String baseUrl;
     private final String serviceKey;
 
+    private HttpHeaders serviceHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Service-Key", serviceKey);
+        headers.set("X-Company-Id", String.valueOf(com.lth.ecommerceagent.tenant.TenantContext.companyId()));
+        headers.set("X-Store-Id", String.valueOf(com.lth.ecommerceagent.tenant.TenantContext.storeId()));
+        return headers;
+    }
+
     public PythonAgentClient(
             @Value("${python.agent.base-url}") String baseUrl,
             @Value("${service.api-key}") String serviceKey,
@@ -49,8 +57,7 @@ public class PythonAgentClient {
     public PythonOperationPlanResult callOperationPlan(PythonOperationPlanRequest request) {
         String url = baseUrl + "/agent/ecommerce/operation-plan";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonOperationPlanRequest> entity = new HttpEntity<>(request, headers);
             PythonOperationPlanResult result =
                     restTemplate.postForObject(url, entity, PythonOperationPlanResult.class);
@@ -68,8 +75,7 @@ public class PythonAgentClient {
     public PythonFulfillmentResult callOrderFulfillment(PythonOrderFulfillmentRequest request) {
         String url = baseUrl + "/agent/ecommerce/order-fulfillment";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonOrderFulfillmentRequest> entity = new HttpEntity<>(request, headers);
             PythonFulfillmentResult result =
                     restTemplate.postForObject(url, entity, PythonFulfillmentResult.class);
@@ -87,8 +93,7 @@ public class PythonAgentClient {
     public PythonOrderVerifyResult verifyOrder(PythonOrderVerifyRequest request) {
         String url = baseUrl + "/agent/ecommerce/order-monitor/verify";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonOrderVerifyRequest> entity = new HttpEntity<>(request, headers);
             PythonOrderVerifyResult result =
                     restTemplate.postForObject(url, entity, PythonOrderVerifyResult.class);
@@ -106,8 +111,7 @@ public class PythonAgentClient {
     public PythonPaymentVerifyResult verifyPayment(PythonOrderVerifyRequest request) {
         String url = baseUrl + "/agent/ecommerce/order-monitor/verify-payment";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonOrderVerifyRequest> entity = new HttpEntity<>(request, headers);
             PythonPaymentVerifyResult result =
                     restTemplate.postForObject(url, entity, PythonPaymentVerifyResult.class);
@@ -130,8 +134,7 @@ public class PythonAgentClient {
     public PythonPullOrdersResult pullPlatformOrders(PythonPullOrdersRequest request) {
         String url = baseUrl + "/agent/ecommerce/platform/pull-orders";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonPullOrdersRequest> entity = new HttpEntity<>(request, headers);
             PythonPullOrdersResult result =
                     restTemplate.postForObject(url, entity, PythonPullOrdersResult.class);
@@ -152,8 +155,7 @@ public class PythonAgentClient {
     public PythonPublishListingResult publishListing(PythonPublishListingRequest request) {
         String url = baseUrl + "/agent/ecommerce/platform/publish-listing";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonPublishListingRequest> entity = new HttpEntity<>(request, headers);
             PythonPublishListingResult result =
                     restTemplate.postForObject(url, entity, PythonPublishListingResult.class);
@@ -175,8 +177,7 @@ public class PythonAgentClient {
     public PythonPlatformStatus getPlatformStatus() {
         String url = baseUrl + "/agent/ecommerce/platform/status";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<Void> entity = new HttpEntity<>(headers);
             ResponseEntity<PythonPlatformStatus> resp =
                     restTemplate.exchange(url, HttpMethod.GET, entity, PythonPlatformStatus.class);
@@ -201,8 +202,7 @@ public class PythonAgentClient {
     public PythonAddressStatusResult checkAddressStatus(String platform, String platformOrderId) {
         String url = baseUrl + "/agent/ecommerce/order-monitor/address-status";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             Map<String, String> body = new java.util.HashMap<>();
             body.put("platform", platform);
             body.put("platform_order_id", platformOrderId);
@@ -230,8 +230,7 @@ public class PythonAgentClient {
     public PythonPaymentStatusResult checkPaymentStatus(String platform, String platformOrderId) {
         String url = baseUrl + "/agent/ecommerce/order-monitor/payment-status";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             Map<String, String> body = new java.util.HashMap<>();
             body.put("platform", platform);
             body.put("platform_order_id", platformOrderId);
@@ -259,8 +258,7 @@ public class PythonAgentClient {
     public PythonShipResult shipOrder(PythonShipRequest request) {
         String url = baseUrl + "/agent/ecommerce/platform/ship-order";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Service-Key", serviceKey);
+            HttpHeaders headers = serviceHeaders();
             HttpEntity<PythonShipRequest> entity = new HttpEntity<>(request, headers);
             PythonShipResult result = restTemplate.postForObject(url, entity, PythonShipResult.class);
             if (result == null) {

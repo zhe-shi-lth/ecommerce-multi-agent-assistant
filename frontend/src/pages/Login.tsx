@@ -1,14 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
-import { isAuthed, setRole, setToken } from "../auth";
+import { applyAuth, isAuthed, type AuthResult } from "../auth";
 import { api } from "../api/client";
 import RobotMascot from "../components/RobotMascot";
-
-interface LoginResult {
-  token: string;
-  role: string;
-  email: string;
-}
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -28,12 +22,11 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      const result = await api.post<LoginResult>("/auth/login", {
+      const result = await api.post<AuthResult>("/auth/login", {
         email: email.trim(),
         password,
       });
-      setToken(result.token);
-      setRole(result.role);
+      applyAuth(result);
       // 整页跳转：触发 App 重新挂载并重新校验 token，避免登录后白屏
       window.location.replace("/");
     } catch (err) {

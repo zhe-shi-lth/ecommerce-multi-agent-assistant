@@ -11,8 +11,13 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 @Entity
-@Table(name = "daily_sales")
+@Table(name = "daily_sales", uniqueConstraints = @jakarta.persistence.UniqueConstraint(
+        name = "uk_daily_sales_store_product_platform_date", columnNames = {"store_id", "product_id", "platform", "sale_date"}))
 public class DailySales {
+    @Column(name="company_id", nullable=false) private Long companyId;
+    @Column(name="store_id", nullable=false) private Long storeId;
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;}
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

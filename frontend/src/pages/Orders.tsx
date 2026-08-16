@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Select from "../components/Select";
 import { getOrders, recheckAllOrders } from "../api/orders";
 import { getProducts } from "../api/products";
 import type { Order, Product } from "../api/types";
@@ -261,7 +262,7 @@ export default function Orders() {
             </div>
           <div className="filter-item">
             <label className="filter-label">状态</label>
-            <select
+            <Select
               className="header-select"
               value={filters.status}
               onChange={(e) => updateFilter("status", e.target.value)}
@@ -272,11 +273,11 @@ export default function Orders() {
                   {v.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">商品</label>
-            <select
+            <Select
               className="header-select"
               value={filters.productId}
               onChange={(e) => updateFilter("productId", e.target.value)}
@@ -287,11 +288,11 @@ export default function Orders() {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">平台</label>
-            <select
+            <Select
               className="header-select"
               value={filters.platform}
               onChange={(e) => updateFilter("platform", e.target.value)}
@@ -302,11 +303,11 @@ export default function Orders() {
                   {p.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">付款</label>
-            <select
+            <Select
               className="header-select"
               value={filters.paid}
               onChange={(e) => updateFilter("paid", e.target.value)}
@@ -314,11 +315,11 @@ export default function Orders() {
               <option value="ALL">全部</option>
               <option value="PAID">已付款</option>
               <option value="UNPAID">未付款</option>
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">地址</label>
-            <select
+            <Select
               className="header-select"
               value={filters.address}
               onChange={(e) => updateFilter("address", e.target.value)}
@@ -326,11 +327,11 @@ export default function Orders() {
               <option value="ALL">全部</option>
               <option value="COMPLETE">完整</option>
               <option value="INCOMPLETE">不完整</option>
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">人工审核</label>
-            <select
+            <Select
               className="header-select"
               value={filters.manualReview}
               onChange={(e) => updateFilter("manualReview", e.target.value)}
@@ -338,11 +339,11 @@ export default function Orders() {
               <option value="ALL">全部</option>
               <option value="YES">需审核</option>
               <option value="NO">系统自动</option>
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">待处理原因</label>
-            <select
+            <Select
               className="header-select"
               value={filters.pendingReason}
               onChange={(e) => updateFilter("pendingReason", e.target.value)}
@@ -351,7 +352,7 @@ export default function Orders() {
               <option value="UNPAID">待付款</option>
               <option value="ADDRESS_INCOMPLETE">地址不全</option>
               <option value="UNPAID_AND_ADDRESS">未付款且地址不全</option>
-            </select>
+            </Select>
           </div>
           <div className="filter-item">
             <label className="filter-label">下单起</label>
@@ -476,7 +477,7 @@ export default function Orders() {
             </button>
             <span className="pager-size">
               每页
-              <select
+              <Select
                 className="header-select"
                 value={pageSize}
                 onChange={(e) => {
@@ -489,7 +490,7 @@ export default function Orders() {
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
               条
             </span>
           </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Select from "../components/Select";
 import {
   getSuppliers,
   createSupplier,
@@ -243,14 +244,14 @@ export default function Suppliers() {
                 <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
                   <div className="field" style={{ flex: 1 }}>
                     <span>结算方式</span>
-                    <select
+                    <Select
                       value={form.settlementType ?? "CASH"}
                       onChange={(e) => setForm((p) => ({ ...p, settlementType: e.target.value as SupplierInput["settlementType"] }))}
                     >
                       <option value="CASH">现结</option>
                       <option value="MONTHLY">月结</option>
                       <option value="PREPAID">预付</option>
-                    </select>
+                    </Select>
                   </div>
                   <div className="field" style={{ flex: 1 }}>
                     <span>交期（天）</span>
@@ -263,13 +264,13 @@ export default function Suppliers() {
                   </div>
                   <div className="field" style={{ flex: 1 }}>
                     <span>状态</span>
-                    <select
+                    <Select
                       value={form.status ?? "ACTIVE"}
                       onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as SupplierInput["status"] }))}
                     >
                       <option value="ACTIVE">合作中</option>
                       <option value="DISABLED">停用</option>
-                    </select>
+                    </Select>
                   </div>
                 </div>
                 <div className="field">

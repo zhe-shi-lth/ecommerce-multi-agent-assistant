@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/categories")
+@org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_PRODUCT_VIEW') or hasAuthority('PERM_PRODUCT_EDIT')")
 public class CategoryController {
 
     private final CategoryRepository categoryRepository;

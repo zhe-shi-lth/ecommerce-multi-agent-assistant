@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/daily-sales")
+@org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_ORDER_VIEW')")
 public class DailySalesController {
 
     private final DailySalesRepository repository;
@@ -22,11 +23,11 @@ public class DailySalesController {
             @RequestParam(required = false) Long productId,
             @RequestParam(required = false) String platform) {
         if (productId != null) {
-            return repository.findByProductIdOrderBySaleDateAsc(productId);
+            return repository.byProduct(productId);
         }
         if (platform != null && !platform.isBlank()) {
-            return repository.findByPlatformOrderBySaleDateAsc(platform);
+            return repository.byPlatform(platform);
         }
-        return repository.findAll();
+        return repository.scopedAll();
     }
 }

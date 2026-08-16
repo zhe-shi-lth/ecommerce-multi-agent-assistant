@@ -11,14 +11,16 @@ import PurchaseRestock from "./pages/PurchaseRestock";
 import Suppliers from "./pages/Suppliers";
 import NewListing from "./pages/NewListing";
 import Settings from "./pages/Settings";
+import Profile from "./pages/Profile";
 import Simulator from "./pages/Simulator";
 import Login from "./pages/Login";
-import UserMonitoring from "./pages/UserMonitoring";
-import { clearToken, isAuthed, isSuperAdmin, setRole } from "./auth";
+import Organization from "./pages/Organization";
+import { applyAuth, canAccess, canManageOrganization, canManageSettings, clearToken, getIdentity, isAuthed, isSuperAdmin, type AuthResult } from "./auth";
 import { api } from "./api/client";
 import { onAppError } from "./api/errorBus";
 import AlertModal from "./components/AlertModal";
 import { Icon } from "./components/icons";
+import Select from "./components/Select";
 
 export default function App() {
   const [authed, setAuthed] = useState(isAuthed());
@@ -28,16 +30,19 @@ export default function App() {
   const [checking, setChecking] = useState(authed);
   // 全局错误弹窗：后端非 2xx（如 ConfigError 422 中文报错）由 client.ts 发出，此处订阅并居中弹窗。
   const [appError, setAppError] = useState<string | null>(null);
+  const [identity, setCurrentIdentity] = useState(getIdentity());
+  const [accountOpen, setAccountOpen] = useState(false);
   useEffect(() => onAppError((msg) => setAppError(msg)), []);
 
   useEffect(() => {
     if (!authed) return;
     let cancelled = false;
     api
-      .get<{ email: string; role: string }>("/auth/me")
+      .get<AuthResult>("/auth/me")
       .then((me) => {
         if (cancelled) return;
-        if (me.role) setRole(me.role); // 同步最新角色（防本地 role 与令牌不一致）
+        applyAuth(me);
+        setCurrentIdentity(getIdentity());
         setAuthed(true);
         setChecking(false);
       })
@@ -77,10 +82,22 @@ export default function App() {
     window.location.href = "/login";
   }
 
-  // 超管专属路由守卫：非超管直输 URL 时重定向回首页
-  function RequireSuperAdmin({ children }: { children: React.ReactNode }) {
-    return isSuperAdmin() ? <>{children}</> : <Navigate to="/" replace />;
+  async function switchStore(value: string) {
+    const [companyId, storeId] = value.split(":").map(Number);
+    const result = await api.post<AuthResult>("/auth/context", { companyId, storeId });
+    applyAuth(result);
+    setCurrentIdentity(getIdentity());
+    window.location.reload();
   }
+
+  const needsStoreSelection = identity?.storeId == null &&
+    (identity?.companies.find((company) => company.id === identity?.companyId)?.stores.length ?? 0) > 1;
+  if (needsStoreSelection) {
+    const stores = identity!.companies.find((company) => company.id === identity!.companyId)?.stores ?? [];
+    return <div className="store-selection-page"><section className="store-selection-panel"><div className="brand-mark">电</div><h1>选择店铺</h1><p>{identity?.companyName} 有多家店铺，请选择要进入的店铺。</p><div className="store-selection-list">{stores.map((store) => <button key={store.id} onClick={() => void switchStore(`${identity!.companyId}:${store.id}`)}><span>{store.name}</span><small>进入店铺</small></button>)}</div>{canManageOrganization() && <NavLink className="store-selection-org" to="/organization">进入组织与成员管理</NavLink>}</section></div>;
+  }
+
+  // 超管专属路由守卫：非超管直输 URL 时重定向回首页
 
   return (
     <div className="layout">
@@ -90,75 +107,83 @@ export default function App() {
           <span>电商多 Agent</span>
         </h1>
         <nav>
-          <div className="nav-group">核心流程</div>
-          <NavLink to="/new-listing" className="nav-link">
+          {(canAccess("CONTENT_GENERATE") || canAccess("PRODUCT_VIEW")) && <div className="nav-group">核心流程</div>}
+          {canAccess("CONTENT_GENERATE") && <NavLink to="/new-listing" className="nav-link">
             <Icon name="new" />
             新品上架
-          </NavLink>
-          <NavLink to="/operation-plans" className="nav-link">
+          </NavLink>}
+          {canAccess("PRODUCT_VIEW") && <NavLink to="/operation-plans" className="nav-link">
             <Icon name="plans" />
             运营计划
-          </NavLink>
-          <div className="nav-group">经营数据</div>
-          <NavLink to="/products" className="nav-link">
+          </NavLink>}
+          {(canAccess("PRODUCT_VIEW") || canAccess("INVENTORY_VIEW") || canAccess("ORDER_VIEW") || canAccess("PURCHASE_CREATE") || canAccess("SUPPLIER_MANAGE")) && <div className="nav-group">经营数据</div>}
+          {canAccess("PRODUCT_VIEW") && <NavLink to="/products" className="nav-link">
             <Icon name="products" />
             商品
-          </NavLink>
-          <NavLink to="/inventories" className="nav-link">
+          </NavLink>}
+          {canAccess("INVENTORY_VIEW") && <NavLink to="/inventories" className="nav-link">
             <Icon name="inventory" />
             库存
-          </NavLink>
-          <NavLink to="/orders" className="nav-link">
+          </NavLink>}
+          {canAccess("ORDER_VIEW") && <NavLink to="/orders" className="nav-link">
             <Icon name="orders" />
             订单
-          </NavLink>
-          <NavLink to="/dashboard" className="nav-link">
+          </NavLink>}
+          {canAccess("ORDER_VIEW") && <NavLink to="/dashboard" className="nav-link">
             <Icon name="dashboard" />
             销售监控
-          </NavLink>
-          <NavLink to="/purchase-restock" className="nav-link">
+          </NavLink>}
+          {canAccess("PURCHASE_CREATE") && <NavLink to="/purchase-restock" className="nav-link">
             <Icon name="purchase" />
             采购补货
-          </NavLink>
-          <NavLink to="/suppliers" className="nav-link">
+          </NavLink>}
+          {canAccess("SUPPLIER_MANAGE") && <NavLink to="/suppliers" className="nav-link">
             <Icon name="supplier" />
             进货商家
-          </NavLink>
-          <div className="nav-group">工具</div>
-          <NavLink to="/simulator" className="nav-link">
-            <Icon name="simulator" />
-            平台模拟
-          </NavLink>
-          <div className="nav-group">配置</div>
-          <NavLink to="/settings" className="nav-link">
+          </NavLink>}
+          {isSuperAdmin() && <>
+            <div className="nav-group">工具</div>
+            <NavLink to="/simulator" className="nav-link">
+              <Icon name="simulator" />
+              平台模拟
+            </NavLink>
+          </>}
+          {canManageSettings() && <div className="nav-group">配置</div>}
+          {canManageSettings() && <NavLink to="/settings" className="nav-link">
             <Icon name="settings" />
             设置中心
-          </NavLink>
-          {isSuperAdmin() && (
-            <div className="nav-group">系统</div>
-          )}
-          {isSuperAdmin() && (
-            <NavLink to="/user-monitoring" className="nav-link">
-              <Icon name="usermonitor" />
-              用户监控
-            </NavLink>
-          )}
-        </nav>
-        <div className="sidebar-footer">
-          <button className="nav-link" onClick={handleLogout}>
-            <Icon name="logout" />
-            退出登录
-          </button>
-        </div>
-      </aside>
-      <AlertModal
-        open={!!appError}
-        title="操作失败"
-        message={appError ?? ""}
-        onClose={() => setAppError(null)}
-      />
-      <main className="content">
+          </NavLink>}
+          </nav>
+        </aside>
+      <div className="main-col">
+        <header className="account-bar">
+          <div className="account-context">
+            <Icon name="store" className="account-context-icon" />
+            {identity?.companies.some((company) => company.stores.length > 0) ? <Select className="account-store-select" ariaLabel="当前店铺" value={`${identity.companyId}:${identity.storeId}`} onChange={(e) => void switchStore(e.target.value)}>
+              {identity.companies.flatMap((company) => company.stores.map((store) => <option key={`${company.id}:${store.id}`} value={`${company.id}:${store.id}`}>{company.name} / {store.name}</option>))}
+            </Select> : <span className="account-company">{identity?.companyName ?? "平台管理"}</span>}
+          </div>
+          <div className="account-menu-wrap">
+            <button className="account-trigger" onClick={() => setAccountOpen((v) => !v)} aria-expanded={accountOpen}>
+              <span className="account-avatar">{(identity?.displayName || identity?.email || "U").slice(0, 1).toUpperCase()}</span>
+              <span className="account-name">{identity?.displayName ? `${identity.displayName} · ${identity.email}` : identity?.email}</span><span className="account-chevron">⌄</span>
+            </button>
+            {accountOpen && <div className="account-menu">
+              {canManageOrganization() && <NavLink to="/organization" onClick={() => setAccountOpen(false)}><Icon name="usermonitor" />组织与成员</NavLink>}
+              <NavLink to="/profile" onClick={() => setAccountOpen(false)}><Icon name="settings" />个人资料</NavLink>
+              <button onClick={handleLogout}><Icon name="logout" />退出登录</button>
+            </div>}
+          </div>
+        </header>
+        <AlertModal
+          open={!!appError}
+          title="操作失败"
+          message={appError ?? ""}
+          onClose={() => setAppError(null)}
+        />
+        <main className="content">
         <Routes>
+          <Route path="/" element={<Navigate to="/operation-plans" replace />} />
           <Route path="/operation-plans" element={<OperationPlans />} />
           <Route path="/operation-plans/:id" element={<OperationPlanDetail />} />
           <Route path="/products" element={<Products />} />
@@ -168,16 +193,10 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/purchase-restock" element={<PurchaseRestock />} />
           <Route path="/suppliers" element={<Suppliers />} />
-          <Route path="/simulator" element={<Simulator />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route
-            path="/user-monitoring"
-            element={
-              <RequireSuperAdmin>
-                <UserMonitoring />
-              </RequireSuperAdmin>
-            }
-          />
+          <Route path="/simulator" element={isSuperAdmin() ? <Simulator /> : <Navigate to="/" replace />} />
+          <Route path="/settings" element={canManageSettings() ? <Settings /> : <Navigate to="/" replace />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/organization" element={canManageOrganization() ? <Organization /> : <Navigate to="/" replace />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
         </Routes>
         {/* 新品上架向导常驻挂载：切到其他 tab 时仅隐藏（display:none），不在进行的
@@ -190,6 +209,7 @@ export default function App() {
           <NewListing />
         </div>
       </main>
+      </div>
     </div>
   );
 }

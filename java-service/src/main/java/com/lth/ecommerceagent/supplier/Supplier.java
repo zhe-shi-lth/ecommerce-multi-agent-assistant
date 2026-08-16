@@ -22,6 +22,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Entity
 @Table(name = "suppliers")
 public class Supplier {
+    @Column(name="company_id",nullable=false) private Long companyId;
 
     public enum SettlementType {
         MONTHLY, // 月结
@@ -38,7 +39,7 @@ public class Supplier {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 120)
+    @Column(nullable = false, length = 120)
     private String name;
 
     @Column(name = "contact_name", length = 60)
@@ -75,6 +76,8 @@ public class Supplier {
     public Long getId() {
         return id;
     }
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();}
+    public Long getCompanyId(){return companyId;}
 
     public void setId(Long id) {
         this.id = id;

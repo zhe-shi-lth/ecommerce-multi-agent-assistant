@@ -19,9 +19,23 @@ import org.springframework.http.HttpStatus;
 public class SecurityConfig {
 
     private final JwtService jwtService;
+    private final com.lth.ecommerceagent.user.UserRepository userRepository;
+    private final com.lth.ecommerceagent.tenant.CompanyRepository companyRepository;
+    private final com.lth.ecommerceagent.tenant.CompanyMemberRepository memberRepository;
+    private final com.lth.ecommerceagent.tenant.StoreRepository storeRepository;
+    private final com.lth.ecommerceagent.tenant.StoreMemberRepository storeMemberRepository;
+    private final com.lth.ecommerceagent.tenant.StoreMemberPermissionRepository permissionRepository;
 
-    public SecurityConfig(JwtService jwtService) {
+    public SecurityConfig(JwtService jwtService, com.lth.ecommerceagent.user.UserRepository userRepository,
+            com.lth.ecommerceagent.tenant.CompanyRepository companyRepository,
+            com.lth.ecommerceagent.tenant.CompanyMemberRepository memberRepository,
+            com.lth.ecommerceagent.tenant.StoreRepository storeRepository,
+            com.lth.ecommerceagent.tenant.StoreMemberRepository storeMemberRepository,
+            com.lth.ecommerceagent.tenant.StoreMemberPermissionRepository permissionRepository) {
         this.jwtService = jwtService;
+        this.userRepository=userRepository; this.companyRepository=companyRepository;
+        this.memberRepository=memberRepository; this.storeRepository=storeRepository;
+        this.storeMemberRepository=storeMemberRepository; this.permissionRepository=permissionRepository;
     }
 
     @Bean
@@ -35,7 +49,8 @@ public class SecurityConfig {
             @Value("${service.api-key}") String serviceApiKey) throws Exception {
         // 自定义过滤器手动实例化并插入过滤链，避免被 Spring Boot 当作普通 servlet Filter 二次注册。
         ServiceKeyFilter serviceKeyFilter = new ServiceKeyFilter(serviceApiKey);
-        JwtAuthenticationFilter jwtAuthenticationFilter = new JwtAuthenticationFilter(jwtService);
+        JwtAuthenticationFilter jwtAuthenticationFilter = new JwtAuthenticationFilter(jwtService, userRepository,
+                companyRepository, memberRepository, storeRepository, storeMemberRepository, permissionRepository);
 
         http
                 .csrf(AbstractHttpConfigurer::disable)

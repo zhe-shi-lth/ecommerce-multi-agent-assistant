@@ -21,6 +21,14 @@ def platform_config(tmp_path, monkeypatch):
             },
         }
     )
+    import app.platform.factory as factory
+    monkeypatch.setattr(factory, "_store_credentials", lambda platform: {
+        "platform": platform, "enabled": platform == "taobao",
+        "app_key": "ak" if platform == "taobao" else "",
+        "app_secret": "as" if platform == "taobao" else "",
+        "access_token": "tok" if platform == "taobao" else "",
+        "endpoint": "", "shop_id": "shop1",
+    })
     yield
 
 

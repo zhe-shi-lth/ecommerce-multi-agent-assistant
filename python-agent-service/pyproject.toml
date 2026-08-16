@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.8.0",
     "python-dotenv>=1.0.0",
     "PyJWT>=2.8.0",  # 校验 Java 签发的 JWT（HS256，密钥共用 JWT_SECRET）
+    "cryptography>=44.0.0",
     "dashscope>=1.26.0",  # 通义万相文生图（wanx-v1），百炼平台需走官方 SDK
 ]
 

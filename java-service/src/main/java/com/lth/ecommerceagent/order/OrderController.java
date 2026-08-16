@@ -25,6 +25,7 @@ import com.lth.ecommerceagent.python.PythonPaymentVerifyResult;
 
 @RestController
 @RequestMapping("/api/orders")
+@org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_ORDER_VIEW') or hasAuthority('PERM_ORDER_REVIEW') or hasAuthority('PERM_ORDER_SHIP')")
 public class OrderController {
 
     // 手工建单时的单号自增序号（配合毫秒时间戳保证唯一）
@@ -50,6 +51,7 @@ public class OrderController {
     }
 
     @PostMapping
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_ORDER_VIEW') or hasAuthority('PERM_ORDER_CREATE') or hasAuthority('PERM_ORDER_REVIEW')")
     public ResponseEntity<OrderResponse> create(@RequestBody OrderCreateRequest request) {
         Product product = findProduct(request.productId());
         Order order = new Order();
@@ -169,6 +171,7 @@ public class OrderController {
      * 平台受理成功 → SHIPPED；平台拒绝/调用异常 → SHIPPING_FAILED（保留原因，可重试）。
      */
     @PostMapping("/{id}/ship")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_ORDER_SHIP')")
     public OrderResponse ship(@PathVariable Long id, @RequestBody(required = false) ShipRequest request) {
         Order order = findOrder(id);
         Order saved = orderCompletionService.ship(order, request != null ? request : new ShipRequest(null, null, null, null));
@@ -181,6 +184,7 @@ public class OrderController {
      * 通过 → 按事实重算履约结论；驳回 → 置 REJECTED（终态，线下取消/退款）。
      */
     @PostMapping("/{id}/review")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_ORDER_REVIEW')")
     public OrderResponse review(@PathVariable Long id, @RequestBody OrderReviewRequest request) {
         Order order = findOrder(id);
         if (!"NEEDS_REVIEW".equals(order.getStatus())) {

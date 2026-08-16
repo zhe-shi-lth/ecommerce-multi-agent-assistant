@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import com.lth.ecommerceagent.purchase.PurchaseOrderRepository;
 
@@ -36,6 +37,7 @@ public class SupplierController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAuthority('PERM_SUPPLIER_MANAGE')")
     public ResponseEntity<SupplierResponse> create(@RequestBody SupplierRequest request) {
         if (request.name() == null || request.name().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "商家名称不能为空");
@@ -50,6 +52,7 @@ public class SupplierController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('PERM_SUPPLIER_MANAGE')")
     public SupplierResponse update(@PathVariable Long id, @RequestBody SupplierRequest request) {
         Supplier s = supplierRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "商家不存在：" + id));
@@ -63,6 +66,7 @@ public class SupplierController {
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('PERM_SUPPLIER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         Supplier s = supplierRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "商家不存在：" + id));

@@ -28,6 +28,8 @@ public class BusinessAuditService {
 
     private String currentOperator() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || !auth.isAuthenticated() ? "SYSTEM" : auth.getName();
+        if (auth == null || !auth.isAuthenticated()) return "SYSTEM";
+        if (auth.getPrincipal() instanceof com.lth.ecommerceagent.tenant.TenantPrincipal p) return p.email();
+        return auth.getName();
     }
 }

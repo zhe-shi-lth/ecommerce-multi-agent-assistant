@@ -6,6 +6,7 @@ import StatusBadge from "../components/StatusBadge";
 import { platformLabel, platformTone } from "../platforms";
 import PageHeader from "../components/PageHeader";
 import { Icon } from "../components/icons";
+import PlatformTaskPanel from "../components/PlatformTaskPanel";
 
 function asStr(v: Json | undefined): string {
   return typeof v === "string" ? v : "";
@@ -158,6 +159,7 @@ export default function OperationPlanDetail() {
           </div>
         )}
       </div>
+      <PlatformTaskPanel entityType="OPERATION_PLAN" entityId={plan.id} />
 
       <div className="card">
         <div className="card-header">

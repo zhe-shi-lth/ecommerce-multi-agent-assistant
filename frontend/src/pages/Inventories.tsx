@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Select from "../components/Select";
 import {
   getInventories,
   createInventory,
@@ -63,18 +64,6 @@ export default function Inventories() {
       setError(String(e));
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function openInventory(inventory: Inventory) {
-    setActiveInventory(inventory);
-    setAdjustStock(inventory.currentStock);
-    setAdjustReason("");
-    setMovements([]);
-    try {
-      setMovements(await getInventoryMovements(inventory.id));
-    } catch (e) {
-      setError(String(e));
     }
   }
 
@@ -185,9 +174,6 @@ export default function Inventories() {
                       <span className="muted" style={{ fontSize: 12 }}>
                         补货请到「采购补货」
                       </span>
-                      <button className="btn btn-secondary btn-sm" onClick={() => openInventory(i)}>
-                        流水与盘点
-                      </button>
                     </div>
                   </div>
                 );
@@ -208,14 +194,14 @@ export default function Inventories() {
               <div className="listing-form" style={{ marginTop: 0 }}>
                 <div className="field">
                   <span>商品 *</span>
-                  <select value={form.productId || ""} onChange={(e) => setField("productId", e.target.value)}>
+                  <Select value={form.productId || ""} onChange={(e) => setField("productId", e.target.value)}>
                     <option value="">请选择商品</option>
                     {products.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.id} · {p.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
                   <div className="field" style={{ flex: 1 }}>

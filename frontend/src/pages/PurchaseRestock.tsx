@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Select from "../components/Select";
 import { useNavigate } from "react-router-dom";
 import {
   getPurchaseOrders,
@@ -88,6 +89,7 @@ export default function PurchaseRestock() {
   const [receipts, setReceipts] = useState<PurchaseReceipt[]>([]);
   const [closeAction, setCloseAction] = useState<{ order: PurchaseOrder; type: "cancel" | "short" } | null>(null);
   const [closeReason, setCloseReason] = useState("");
+  const [activeTab, setActiveTab] = useState<"PENDING_APPROVAL" | "CREATED" | "INBOUND" | "COMPLETED">("PENDING_APPROVAL");
 
   // 创建采购单弹窗（成本闭环：手动填写商家 / 单价 / 进货运费）
   const [modalOpen, setModalOpen] = useState(false);
@@ -555,106 +557,24 @@ export default function PurchaseRestock() {
         )}
       </div>
 
-      {pendingApproval.length > 0 && (
-        <div className="notice notice-warn" style={{ marginBottom: 16 }}>
-          有 {pendingApproval.length} 单采购申请等待运营计划审批，通过后会进入下方已审批采购单。
+      <div className="card pr-orders-panel">
+        <div className="card-header"><h3>采购单</h3><span className="card-sub">同一列表按状态处理</span></div>
+        <div className="pr-tabs">
+          {([ ["PENDING_APPROVAL", "待审批", pendingApproval.length], ["CREATED", "待采购", created.length], ["INBOUND", "待入库", inbound.length], ["COMPLETED", "已完成", stocked.length] ] as const).map(([key, label, count]) => <button key={key} className={activeTab === key ? "pr-tab active" : "pr-tab"} onClick={() => setActiveTab(key)}>{label}<span>{count}</span></button>)}
         </div>
-      )}
-
-      {/* 板块 2：已审批采购单（待采购 / 已下单） */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-header">
-          <h3>已审批采购单</h3>
-          <span className="card-sub">{created.length} 单</span>
-        </div>
-        {created.length === 0 ? (
-          <div className="notice notice-info" style={{ margin: 14 }}>
-            暂无已审批采购单。
-          </div>
-        ) : (
-          created.map((o) => (
-            <Row key={o.id}>
-              <div className="pr-row-name">{productName(o.productId)}</div>
-              <Badge label={poStatusMeta(o.status).label} tone={poStatusMeta(o.status).tone} />
-              <div className="pr-row-tags">{costTags(o)}</div>
-              <div className="pr-row-spacer" />
-              {auditButton(o)}
-              {o.status === "CREATED" && (
-                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(markOrdered(o.id), () => "已标记为已下单")}>
-                  标记已下单
-                </button>
-              )}
-              {o.status === "ORDERED" && (
-                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(markInbound(o.id), () => "已标记为待入库")}>
-                  标记待入库
-                </button>
-              )}
-              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setCloseAction({ order: o, type: "cancel" }); setCloseReason(""); }}>
-                取消采购
-              </button>
-            </Row>
-          ))
-        )}
-      </div>
-
-      {/* 板块 3：待入库 */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-header">
-          <h3>待入库</h3>
-          <span className="card-sub">{inbound.length} 单</span>
-        </div>
-        {inbound.length === 0 ? (
-          <div className="notice notice-info" style={{ margin: 14 }}>
-            没有待入库的采购单。
-          </div>
-        ) : (
-          inbound.map((o) => (
-            <Row key={o.id}>
-              <div className="pr-row-name">{productName(o.productId)}</div>
-              <Badge label={poStatusMeta(o.status).label} tone={poStatusMeta(o.status).tone} />
-              <div className="pr-row-tags">{costTags(o)}</div>
-              <div className="pr-row-spacer" />
-              {auditButton(o)}
-              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => openStockIn(o)}>
-                <Icon name="check" /> 确认入库
-              </button>
-              {o.status === "INBOUND" && (o.receivedQuantity ?? 0) === 0 && (
-                <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setCloseAction({ order: o, type: "cancel" }); setCloseReason(""); }}>
-                  取消采购
-                </button>
-              )}
-              {o.status === "PARTIALLY_RECEIVED" && (
-                <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setCloseAction({ order: o, type: "short" }); setCloseReason(""); }}>
-                  短交关闭
-                </button>
-              )}
-            </Row>
-          ))
-        )}
-      </div>
-
-      {/* 板块 4：已入库记录 */}
-      <div className="card">
-        <div className="card-header">
-          <h3>已完成与关闭记录</h3>
-          <span className="card-sub">{stocked.length} 单</span>
-        </div>
-        {stocked.length === 0 ? (
-          <div className="notice notice-info" style={{ margin: 14 }}>
-            还没有已完成或已关闭的采购单。
-          </div>
-        ) : (
-          stocked.map((o) => (
-            <Row key={o.id}>
-              <div className="pr-row-name">{productName(o.productId)}</div>
-              <Badge label={poStatusMeta(o.status).label} tone={poStatusMeta(o.status).tone} />
-              <div className="pr-row-tags">{costTags(o)}</div>
-              <div className="pr-row-spacer" />
-              {auditButton(o)}
-              <span className="mini neutral">入库时已自动重查缺货订单</span>
-            </Row>
-          ))
-        )}
+        {activeTab === "PENDING_APPROVAL" && <div className="notice notice-warn" style={{ margin: "14px 0" }}>采购申请需要先到「运营计划」审批，通过后进入待采购。</div>}
+        {(() => {
+          const visible = activeTab === "PENDING_APPROVAL" ? pendingApproval : activeTab === "CREATED" ? created : activeTab === "INBOUND" ? inbound : stocked;
+          if (visible.length === 0) return <div className="notice notice-info" style={{ marginTop: 14 }}>当前状态暂无采购单。</div>;
+          return visible.map((o) => <Row key={o.id}>
+            <div className="pr-row-name">{productName(o.productId)}</div><Badge label={poStatusMeta(o.status).label} tone={poStatusMeta(o.status).tone} /><div className="pr-row-tags">{costTags(o)}</div><div className="pr-row-spacer" />{auditButton(o)}
+            {activeTab === "CREATED" && o.status === "CREATED" && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(markOrdered(o.id), () => "已标记为已下单")}>标记已下单</button>}
+            {activeTab === "CREATED" && o.status === "ORDERED" && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(markInbound(o.id), () => "已标记为待入库")}>标记待入库</button>}
+            {activeTab === "INBOUND" && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => openStockIn(o)}><Icon name="check" /> 确认入库</button>}
+            {activeTab === "INBOUND" && o.status === "PARTIALLY_RECEIVED" && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setCloseAction({ order: o, type: "short" }); setCloseReason(""); }}>短交关闭</button>}
+            {activeTab === "CREATED" && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setCloseAction({ order: o, type: "cancel" }); setCloseReason(""); }}>取消采购</button>}
+          </Row>);
+        })()}
       </div>
 
       {auditOrder && (
@@ -726,7 +646,7 @@ export default function PurchaseRestock() {
               <div className="pr-form-grid">
                 <label className="field">
                   <span>进货商家</span>
-                  <select
+                  <Select
                     className="header-select"
                     value={form.supplierId ?? ""}
                     onChange={(e) => {
@@ -741,7 +661,7 @@ export default function PurchaseRestock() {
                           {s.leadTimeDays ? `（交期 ${s.leadTimeDays} 天）` : ""}
                         </option>
                       ))}
-                  </select>
+                  </Select>
                 </label>
 
                 <label className="field">

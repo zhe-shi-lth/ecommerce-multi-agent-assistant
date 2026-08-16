@@ -14,6 +14,9 @@ import org.hibernate.annotations.CreationTimestamp;
 @Table(name = "categories")
 public class Category {
 
+    @Column(name="company_id", nullable=false)
+    private Long companyId;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -28,6 +31,10 @@ public class Category {
     public Long getId() {
         return id;
     }
+
+    @jakarta.persistence.PrePersist
+    void assignTenant() { if (companyId == null) companyId = com.lth.ecommerceagent.tenant.TenantContext.companyId(); }
+    public Long getCompanyId() { return companyId; }
 
     public void setId(Long id) {
         this.id = id;

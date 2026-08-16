@@ -13,6 +13,11 @@ import org.hibernate.annotations.CreationTimestamp;
 @Entity
 @Table(name = "business_audit_logs")
 public class BusinessAuditLog {
+    @Column(name="company_id",nullable=false) private Long companyId;
+    @Column(name="store_id",nullable=false) private Long storeId;
+    @Column(name="user_id") private Long userId;
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();if(userId==null)userId=com.lth.ecommerceagent.tenant.TenantContext.userId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;} public Long getUserId(){return userId;}
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

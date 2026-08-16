@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import com.lth.ecommerceagent.supplier.Supplier;
 import com.lth.ecommerceagent.supplier.SupplierRepository;
@@ -30,6 +31,7 @@ public class ProductController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAuthority('PERM_PRODUCT_VIEW') or hasAuthority('PERM_PRODUCT_CREATE') or hasAuthority('PERM_PRODUCT_EDIT')")
     public ResponseEntity<ProductResponse> create(@RequestBody ProductCreateRequest request) {
         Product product = new Product();
         apply(request, product);
@@ -48,6 +50,7 @@ public class ProductController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('PERM_PRODUCT_EDIT')")
     public ProductResponse update(@PathVariable Long id, @RequestBody ProductCreateRequest request) {
         Product product = findProduct(id);
         apply(request, product);
@@ -55,6 +58,7 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('PERM_PRODUCT_EDIT')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         Product product = findProduct(id);
         productRepository.delete(product);
@@ -71,7 +75,7 @@ public class ProductController {
         product.setName(request.getName());
         product.setCategory(request.getCategory());
         product.setDescription(request.getDescription());
-        product.setCostPrice(request.getCostPrice());
+        if (product.getId() == null) product.setCostPrice(java.math.BigDecimal.ZERO);
         product.setSalePrice(request.getSalePrice());
         // 前端建商品无需关心状态/人群/场景，缺省兜底，避免 NOT NULL 约束 500
         product.setTargetAudience(request.getTargetAudience() != null ? request.getTargetAudience() : "");

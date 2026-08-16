@@ -18,6 +18,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Entity
 @Table(name = "inventories")
 public class Inventory {
+    @Column(name="company_id",nullable=false) private Long companyId;
+    @Column(name="store_id",nullable=false) private Long storeId;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -56,6 +58,8 @@ public class Inventory {
     public Long getId() {
         return id;
     }
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;}
 
     public void setId(Long id) {
         this.id = id;

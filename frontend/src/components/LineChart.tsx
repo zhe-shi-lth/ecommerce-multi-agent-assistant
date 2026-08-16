@@ -1,3 +1,5 @@
+import { useRef, useState } from "react";
+
 interface ChartPoint {
   label: string;
   value: number;
@@ -17,75 +19,165 @@ function niceMax(v: number): number {
   return m * pow;
 }
 
-// 轻量 SVG 折线图，无第三方依赖（避免 npm 安装受网络限制）。
-export default function LineChart({ data, height = 220 }: { data: ChartPoint[]; height?: number }) {
-  const width = 660;
-  const padL = 46;
-  const padR = 16;
-  const padT = 16;
-  const padB = 40;
+// 紧凑数字格式化（12000 -> 1.2万，1234 -> 1234），便于纵轴与 tooltip 显示。
+function fmtNum(v: number): string {
+  if (v >= 10000) return (v / 10000).toFixed(v % 10000 === 0 ? 0 : 1) + "万";
+  if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k";
+  return String(Math.round(v));
+}
+
+// Catmull-Rom -> 三次贝塞尔，得到平滑曲线（比生硬折线更精致）。
+function smoothPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 3) return "M " + pts.map((p) => `${p.x},${p.y}`).join(" L ");
+  let d = `M ${pts[0].x},${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+const W = 720;
+const PAD_L = 46;
+const PAD_R = 18;
+const PAD_T = 18;
+const PAD_B = 42;
+
+export default function LineChart({
+  data,
+  height = 240,
+  unit,
+}: {
+  data: ChartPoint[];
+  height?: number;
+  unit?: string;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+
   if (data.length === 0) return <p className="muted">无数据</p>;
 
-  const values = data.map((d) => d.value);
-  const yMax = niceMax(Math.max(...values, 0));
-  const yMin = 0;
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
+  const H = height;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
   const n = data.length;
   const stepX = plotW / Math.max(n - 1, 1);
+  const yMax = niceMax(Math.max(...data.map((d) => d.value), 1));
 
-  const xOf = (i: number) => padL + i * stepX;
-  const yOf = (v: number) => padT + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
-  const points = data.map((d, i) => `${xOf(i)},${yOf(d.value)}`).join(" ");
+  const xOf = (i: number) => PAD_L + i * stepX;
+  const yOf = (v: number) => PAD_T + plotH - (v / yMax) * plotH;
 
-  // y 轴刻度（0 / 0.25 / 0.5 / 0.75 / 1 倍上限）+ 横向网格线。
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-    const v = yMin + (yMax - yMin) * t;
-    return { v: Math.round(v), y: yOf(v) };
-  });
+  const pts = data.map((d, i) => ({ x: xOf(i), y: yOf(d.value) }));
+  const linePath = smoothPath(pts);
+  const areaPath = `${linePath} L ${xOf(n - 1).toFixed(1)},${(PAD_T + plotH).toFixed(1)} L ${PAD_L},${PAD_T + plotH} Z`;
 
-  // x 轴标签：天数少时每天都标；天数多时按 ~12 个等间隔抽稀（仍对齐到真实日期）。
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => ({
+    v: Math.round(yMax * t),
+    y: yOf(yMax * t),
+  }));
+
   const labelEvery = n <= 14 ? 1 : Math.ceil(n / 14);
   const rotate = n > 14;
 
+  function onMove(e: React.MouseEvent<SVGSVGElement>) {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    let i = Math.round((x - PAD_L) / stepX);
+    i = Math.max(0, Math.min(n - 1, i));
+    setHover(i);
+  }
+
+  const hd = hover != null ? data[hover] : null;
+  const tipLeft = hover != null ? (xOf(hover) / W) * 100 : 0;
+  const tipTop = hover != null ? (yOf(data[hover].value) / H) * 100 : 0;
+
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="line-chart" preserveAspectRatio="xMidYMid meet">
-      {/* 横向网格线 + y 轴刻度值 */}
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line x1={padL} y1={t.y} x2={width - padR} y2={t.y} stroke="#eceef2" />
-          <text x={padL - 6} y={t.y + 3} fontSize={9} textAnchor="end" fill="#8a8f98">
-            {t.v}
-          </text>
-        </g>
-      ))}
+    <div className="line-chart-wrap">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="line-chart"
+        preserveAspectRatio="xMidYMid meet"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        role="img"
+        aria-label="销售趋势折线图"
+      >
+        <defs>
+          <linearGradient id="lc-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ff2442" stopOpacity={0.22} />
+            <stop offset="100%" stopColor="#ff2442" stopOpacity={0} />
+          </linearGradient>
+        </defs>
 
-      {/* 坐标轴 */}
-      <line x1={padL} y1={padT} x2={padL} y2={height - padB} stroke="#c9ced6" />
-      <line x1={padL} y1={height - padB} x2={width - padR} y2={height - padB} stroke="#c9ced6" />
+        {/* 横向网格线 + 纵轴刻度值 */}
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line className="lc-grid" x1={PAD_L} y1={t.y} x2={W - PAD_R} y2={t.y} />
+            <text className="lc-axis" x={PAD_L - 8} y={t.y + 4} textAnchor="end">
+              {fmtNum(t.v)}
+            </text>
+          </g>
+        ))}
 
-      {/* 折线与数据点 */}
-      <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth={2} />
-      {data.map((d, i) => (
-        <circle key={i} cx={xOf(i)} cy={yOf(d.value)} r={3} fill="#3b82f6" />
-      ))}
+        {/* 坐标轴 */}
+        <line className="lc-axis-line" x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={H - PAD_B} />
+        <line className="lc-axis-line" x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} />
 
-      {/* x 轴标签（每天/抽稀，对齐真实日期） */}
-      {data.map((d, i) =>
-        i % labelEvery === 0 || i === n - 1 ? (
-          <text
+        {/* 面积 + 折线 */}
+        <path className="lc-area" d={areaPath} fill="url(#lc-area)" />
+        <path className="lc-line" d={linePath} pathLength={1} />
+
+        {/* 数据点（悬停高亮） */}
+        {pts.map((p, i) => (
+          <circle
             key={i}
-            x={xOf(i)}
-            y={height - padB + 14}
-            fontSize={9}
-            textAnchor={rotate ? "end" : "middle"}
-            fill="#8a8f98"
-            transform={rotate ? `rotate(-38 ${xOf(i)} ${height - padB + 14})` : undefined}
-          >
-            {d.label.slice(5)}
-          </text>
-        ) : null
+            className={"lc-dot" + (hover === i ? " active" : "")}
+            cx={p.x}
+            cy={p.y}
+            r={hover === i ? 5 : 3}
+          />
+        ))}
+
+        {/* 悬停指示线 */}
+        {hover != null && (
+          <line className="lc-hover" x1={xOf(hover)} y1={PAD_T} x2={xOf(hover)} y2={H - PAD_B} />
+        )}
+
+        {/* x 轴标签 */}
+        {data.map((d, i) =>
+          i % labelEvery === 0 || i === n - 1 ? (
+            <text
+              key={i}
+              className="lc-axis"
+              x={xOf(i)}
+              y={H - PAD_B + 16}
+              textAnchor={rotate ? "end" : "middle"}
+              transform={rotate ? `rotate(-38 ${xOf(i)} ${H - PAD_B + 16})` : undefined}
+            >
+              {d.label}
+            </text>
+          ) : null
+        )}
+      </svg>
+
+      {hd && (
+        <div className="lc-tip" style={{ left: `${tipLeft}%`, top: `${tipTop}%` }}>
+          <div className="lc-tip-date">{hd.label}</div>
+          <div className="lc-tip-val">
+            {fmtNum(hd.value)}
+            {unit ? ` ${unit}` : ""}
+          </div>
+        </div>
       )}
-    </svg>
+    </div>
   );
 }

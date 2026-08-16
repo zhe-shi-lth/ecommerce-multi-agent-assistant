@@ -1,12 +1,12 @@
 // 轻量 fetch 封装：开发期经 Vite proxy 走相对前缀（/api 或 /agent），无需写死后端地址。
-import { clearToken, getToken } from "../auth";
+import { clearToken, getIdentity, getToken } from "../auth";
 import { emitAppError } from "./errorBus";
 
 async function requestWithPrefix<T>(
   prefix: string,
   path: string,
   init?: RequestInit,
-  opts?: { silent?: boolean },
+  opts?: { silent?: boolean; redirectOnUnauthorized?: boolean },
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
@@ -16,11 +16,17 @@ async function requestWithPrefix<T>(
   // 携带后端签发的 JWT（Bearer），用于 Java 与 Python 双侧鉴权。
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  // Python Agent 不解析前端 JWT，显式传递当前企业/店铺上下文，避免回退到默认租户。
+  if (prefix === "/agent") {
+    const identity = getIdentity();
+    if (identity?.companyId != null) headers.set("X-Company-Id", String(identity.companyId));
+    if (identity?.storeId != null) headers.set("X-Store-Id", String(identity.storeId));
+  }
 
   const res = await fetch(`${prefix}${path}`, { ...init, headers });
   if (!res.ok) {
     // 令牌失效（过期/无效）：清空本地状态并跳回登录页（登录接口本身的 401 不跳转，留待页面提示）。
-    if (res.status === 401 && !path.includes("/auth/login")) {
+    if (res.status === 401 && !path.includes("/auth/login") && opts?.redirectOnUnauthorized !== false) {
       clearToken();
       window.location.href = "/login";
     }
@@ -60,12 +66,12 @@ async function requestWithPrefix<T>(
 }
 
 export const api = {
-  get: <T>(path: string, opts?: { silent?: boolean }) => requestWithPrefix<T>("/api", path, undefined, opts),
-  post: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+  get: <T>(path: string, opts?: { silent?: boolean; redirectOnUnauthorized?: boolean }) => requestWithPrefix<T>("/api", path, undefined, opts),
+  post: <T>(path: string, body?: unknown, opts?: { silent?: boolean; redirectOnUnauthorized?: boolean }) =>
     requestWithPrefix<T>("/api", path, { method: "POST", body: body ? JSON.stringify(body) : undefined }, opts),
-  put: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+  put: <T>(path: string, body?: unknown, opts?: { silent?: boolean; redirectOnUnauthorized?: boolean }) =>
     requestWithPrefix<T>("/api", path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }, opts),
-  delete: <T>(path: string, opts?: { silent?: boolean }) =>
+  delete: <T>(path: string, opts?: { silent?: boolean; redirectOnUnauthorized?: boolean }) =>
     requestWithPrefix<T>("/api", path, { method: "DELETE" }, opts),
 };
 

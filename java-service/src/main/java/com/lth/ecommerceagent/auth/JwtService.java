@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Date;
+import com.lth.ecommerceagent.tenant.TenantPrincipal;
 
 /**
  * HS256 JWT 签发与解析。密钥与 Python 服务共用（来自 application.yml 的 jwt.secret，
@@ -38,12 +39,17 @@ public class JwtService {
         this.expirationMs = expirationMs;
     }
 
-    public String generateToken(String email, String role) {
+    public String generateToken(TenantPrincipal principal) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMs);
         return Jwts.builder()
-                .subject(email)
-                .claim("role", role)
+                .subject(principal.email())
+                .claim("uid", principal.userId())
+                .claim("role", principal.globalRole())
+                .claim("companyId", principal.companyId())
+                .claim("storeId", principal.storeId())
+                .claim("memberRole", principal.memberRole().name())
+                .claim("permissions", principal.permissions().stream().map(Enum::name).toList())
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(key)

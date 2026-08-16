@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import Select from "../components/Select";
 import { useNavigate, useParams } from "react-router-dom";
 import { getOrder, completeAddress, markPaid, shipOrder, reviewOrder, recheckOrder,
   cancelOrder } from "../api/orders";
@@ -296,7 +297,7 @@ export default function OrderDetail() {
   );
 
   return (
-    <section>
+    <section className="order-detail-page">
       <PageHeader
         title={`订单 #${order.id}`}
         subtitle="商家视角 · 订单履约处理"
@@ -344,7 +345,7 @@ export default function OrderDetail() {
       )}
 
       {/* 操作区：当前状态唯一的处理入口 */}
-      <div className="card">
+      <div className="card order-action-card">
         <div className="card-header">
           <h3>操作</h3>
         </div>
@@ -416,7 +417,7 @@ export default function OrderDetail() {
               }}
             >
               <span style={{ fontSize: 13, color: "#5b5f6b" }}>物流公司</span>
-              <select
+              <Select
                 className="header-select"
                 value={shipLogistics}
                 onChange={(e) => setShipLogistics(e.target.value)}
@@ -426,7 +427,7 @@ export default function OrderDetail() {
                     {c}
                   </option>
                 ))}
-              </select>
+              </Select>
               <input
                 className="filter-input"
                 style={{ width: 200 }}
@@ -458,10 +459,10 @@ export default function OrderDetail() {
             <>
               <button
                 className="btn btn-secondary"
-                onClick={() => navigate(`/dashboard?focusProduct=${order!.productId}`)}
+                onClick={() => navigate("/purchase-restock")}
                 disabled={busy}
               >
-                <Icon name="dashboard" /> 前往销售监控补货
+                <Icon name="purchase" /> 前往采购补货
               </button>
               <button className="btn btn-primary" onClick={handleRecheck} disabled={busy}>
                 {busy ? <span className="spinner" /> : <Icon name="check" />}
@@ -550,7 +551,7 @@ export default function OrderDetail() {
             <div className="modal-title">发起售后</div>
             <div className="modal-body">
               <div className="listing-form" style={{ marginTop: 0 }}>
-                <label className="field"><span>售后类型</span><select value={afterSaleForm.type} onChange={(e) => setAfterSaleForm((f) => ({ ...f, type: e.target.value as "REFUND_ONLY" | "RETURN_REFUND" }))}><option value="REFUND_ONLY">仅退款</option><option value="RETURN_REFUND">退货退款</option></select></label>
+                <label className="field"><span>售后类型</span><Select value={afterSaleForm.type} onChange={(e) => setAfterSaleForm((f) => ({ ...f, type: e.target.value as "REFUND_ONLY" | "RETURN_REFUND" }))}><option value="REFUND_ONLY">仅退款</option><option value="RETURN_REFUND">退货退款</option></Select></label>
                 <label className="field"><span>商品数量</span><input type="number" min={1} max={order.quantity} value={afterSaleForm.quantity} onChange={(e) => setAfterSaleForm((f) => ({ ...f, quantity: Number(e.target.value) }))} /></label>
                 <label className="field"><span>退款金额</span><input type="number" min={0.01} step="0.01" value={afterSaleForm.refundAmount} onChange={(e) => setAfterSaleForm((f) => ({ ...f, refundAmount: e.target.value }))} /></label>
                 <label className="field"><span>售后原因</span><textarea rows={3} value={afterSaleForm.reason} onChange={(e) => setAfterSaleForm((f) => ({ ...f, reason: e.target.value }))} /></label>
@@ -562,7 +563,7 @@ export default function OrderDetail() {
       )}
 
       <div className="card">
-        <div className="card-header"><h3>售后处理</h3><span className="card-sub">{afterSales.length} 单</span></div>
+          <div className="card-header"><h3 className="hidden-detail-log">售后处理</h3><span className="card-sub">{afterSales.length} 单</span></div>
         {afterSales.length === 0 ? <div className="notice notice-info" style={{ margin: 14 }}>暂无售后申请。</div> : afterSales.map((item) => (
           <div className="pr-row" key={item.id}>
             <div className="pr-row-name">{item.afterSaleNo}</div>
@@ -600,7 +601,7 @@ export default function OrderDetail() {
 
       <div className="card">
         <div className="card-header">
-          <h3>操作记录</h3>
+            <h3 className="hidden-detail-log">操作记录</h3>
           <span className="card-sub">{auditLogs.length} 条</span>
         </div>
         {auditLogs.length === 0 ? (
@@ -620,7 +621,7 @@ export default function OrderDetail() {
 
       <div className="card">
         <div className="card-header">
-          <h3>库存流水</h3>
+            <h3 className="hidden-detail-log">库存流水</h3>
           <span className="card-sub">{movements.length} 条</span>
         </div>
         {movements.length === 0 ? (

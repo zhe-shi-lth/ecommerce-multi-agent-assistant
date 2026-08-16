@@ -16,8 +16,10 @@ from app.api.settings import router as settings_router
 from app.api.video import router as video_router
 from app.errors import ConfigError
 from app.media_store import MEDIA_ROOT
+from app.security import rate_limit_middleware, tenant_context, tenant_context_middleware, validate_production_secrets
 
 load_dotenv()
+validate_production_secrets()
 
 # 与 Java 共用同一密钥：JWT_SECRET 用于校验浏览器下发的 Bearer JWT，
 # SERVICE_API_KEY 用于放行 Java<->Python 双向闭环的内部调用（X-Service-Key 头）。
@@ -37,12 +39,18 @@ def get_current_user(
     """业务路由统一鉴权：接受服务间密钥或服务下发的 JWT，否则 401。"""
     # 服务间调用（Java 编排 / Python 写回 Java）
     if x_service_key and x_service_key == SERVICE_API_KEY:
-        return {"sub": "service", "role": "SERVICE"}
+        claims = {"sub": "service", "role": "SERVICE"}
+        request.state.user = claims
+        return claims
     # 浏览器下发的用户 JWT
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
         try:
-            return jwt.decode(token, JWT_KEY, algorithms=["HS256"])
+            claims = jwt.decode(token, JWT_KEY, algorithms=["HS256"])
+            if claims.get("companyId") and claims.get("storeId"):
+                tenant_context.set((int(claims["companyId"]), int(claims["storeId"])))
+            request.state.user = claims
+            return claims
         except jwt.PyJWTError:
             raise HTTPException(status_code=401, detail="无效或过期的凭证")
     raise HTTPException(status_code=401, detail="未认证")
@@ -52,6 +60,8 @@ app = FastAPI(
     title="Ecommerce Agent Service",
     version="0.1.0",
 )
+app.middleware("http")(rate_limit_middleware)
+app.middleware("http")(tenant_context_middleware)
 MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/agent/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 

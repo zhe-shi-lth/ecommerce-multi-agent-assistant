@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Select from "../components/Select";
 import {
   getProducts,
   createProduct,
@@ -278,18 +279,18 @@ export default function Products() {
                 </div>
                 <div className="field">
                   <span>类目 *</span>
-                  <select value={form.category} onChange={(e) => setField("category", e.target.value)}>
+                  <Select value={form.category} onChange={(e) => setField("category", e.target.value)}>
                     <option value="">请选择品类</option>
                     {categories.map((c) => (
                       <option key={c.id} value={c.name}>
                         {c.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div className="field">
                   <span>进货商家</span>
-                  <select
+                  <Select
                     value={form.supplierId ?? ""}
                     onChange={(e) =>
                       setForm((prev) => ({
@@ -304,7 +305,7 @@ export default function Products() {
                         {s.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div className="field">
                   <span>描述 *</span>
@@ -313,7 +314,7 @@ export default function Products() {
                 <div className="listing-form" style={{ flexDirection: "row", gap: 12 }}>
                   <div className="field" style={{ flex: 1 }}>
                     <span>成本价</span>
-                    <input type="number" value={form.costPrice} onChange={(e) => setField("costPrice", e.target.value)} />
+                    <div className="readonly-field">采购入库后自动计算</div>
                   </div>
                   <div className="field" style={{ flex: 1 }}>
                     <span>售价</span>

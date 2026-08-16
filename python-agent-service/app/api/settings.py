@@ -11,15 +11,21 @@
 - 仅 "custom" 厂家允许手填 base_url + 模型名。
 - 凭证（API key / base_url）仅来自页面设置中心，不读 .env。
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import model_catalog
-from app.settings_store import DEFAULT_SETTINGS, PLATFORM_KEYS, capabilities, get_settings, save_settings
+from app.settings_store import DEFAULT_SETTINGS, PLATFORM_KEYS, capabilities, get_settings, save_settings, public_settings
 
 router = APIRouter(prefix="/agent/ecommerce", tags=["settings"])
 
 _CAPABILITIES = ("llm", "image", "video", "monitor")
+
+def _require_platform_config(request: Request) -> None:
+    user = getattr(request.state, "user", {})
+    if user.get("role") in {"SERVICE", "SUPER_ADMIN"} or user.get("memberRole") == "OWNER":
+        return
+    raise HTTPException(status_code=403, detail="只有超级管理员、企业老板或拥有平台设置权限的成员可以操作设置中心")
 
 
 class SettingsPatch(BaseModel):
@@ -112,18 +118,23 @@ def _validate(patch: dict) -> dict:
 
 
 @router.get("/settings")
-def get_settings_endpoint() -> dict:
-    return get_settings()
+def get_settings_endpoint(request: Request) -> dict:
+    _require_platform_config(request)
+    result = public_settings(get_settings())
+    result.pop("platform_api", None)
+    return result
 
 
 @router.get("/model-catalog")
-def model_catalog_endpoint() -> dict:
+def model_catalog_endpoint(request: Request) -> dict:
+    _require_platform_config(request)
     """厂家+模型目录：前端据此渲染下拉，每个模型条目含 label / api_style / 派生 base_url。"""
     return model_catalog.get_catalog()
 
 
 @router.get("/capabilities")
-def capabilities_endpoint() -> dict:
+def capabilities_endpoint(request: Request) -> dict:
+    _require_platform_config(request)
     """各模型功能当前是否可用（基于部署开关 + 运行时设置 + 是否填了 Key）。
 
     前端在调用大模型功能前据此拦截并提示用户去设置中心填 Key。
@@ -132,7 +143,11 @@ def capabilities_endpoint() -> dict:
 
 
 @router.put("/settings")
-def put_settings_endpoint(patch: SettingsPatch) -> dict:
+def put_settings_endpoint(patch: SettingsPatch, request: Request) -> dict:
+    _require_platform_config(request)
     raw = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
+    raw.pop("platform_api", None)
     clean = _validate(raw)
-    return save_settings(clean)
+    result = public_settings(save_settings(clean))
+    result.pop("platform_api", None)
+    return result

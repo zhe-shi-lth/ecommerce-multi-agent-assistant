@@ -6,6 +6,10 @@ import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
 @Entity @Table(name="media_assets")
 public class MediaAsset {
+    @Column(name="company_id", nullable=false) private Long companyId;
+    @Column(name="store_id", nullable=false) private Long storeId;
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;}
  @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id;
  @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="product_id") private Product product;
  @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="operation_plan_id") private OperationPlan operationPlan;

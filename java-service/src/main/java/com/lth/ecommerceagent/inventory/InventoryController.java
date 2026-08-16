@@ -13,12 +13,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import com.lth.ecommerceagent.product.Product;
 import com.lth.ecommerceagent.product.ProductRepository;
 
 @RestController
 @RequestMapping("/api/inventories")
+@PreAuthorize("hasAuthority('PERM_INVENTORY_VIEW') or hasAuthority('PERM_INVENTORY_ADJUST')")
 public class InventoryController {
 
     private final InventoryRepository inventoryRepository;
@@ -35,6 +37,7 @@ public class InventoryController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAuthority('PERM_INVENTORY_VIEW') or hasAuthority('PERM_INVENTORY_CREATE') or hasAuthority('PERM_INVENTORY_ADJUST')")
     public ResponseEntity<InventoryResponse> create(@RequestBody InventoryCreateRequest request) {
         Product product = findProduct(request.productId());
         Inventory inventory = new Inventory();
@@ -74,6 +77,7 @@ public class InventoryController {
     }
 
     @PostMapping("/{id}/adjust")
+    @PreAuthorize("hasAuthority('PERM_INVENTORY_ADJUST')")
     public InventoryResponse adjust(@PathVariable Long id, @RequestBody InventoryAdjustmentRequest request) {
         Inventory inventory = findInventory(id);
         if (request.newCurrentStock() == null || request.newCurrentStock() < 0) {

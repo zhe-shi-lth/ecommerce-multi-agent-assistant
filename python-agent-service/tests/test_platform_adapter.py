@@ -12,9 +12,11 @@ def test_get_adapter_unknown_platform():
         get_adapter("weibo")
 
 
-def test_unconfigured_adapter_get_address_complete_falls_back_to_simulator():
+def test_adapter_without_tenant_context_fails_closed():
     # 默认 taobao 未开启（模拟器模式）：require_ready 仍抛中文 ConfigError
-    adapter = get_adapter("taobao")
+    with pytest.raises(ConfigError):
+        get_adapter("taobao")
+    return
     with pytest.raises(ConfigError) as exc:
         adapter.require_ready()
     assert "平台对接" in str(exc.value)

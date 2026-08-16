@@ -39,6 +39,7 @@ public class OrderAddressSyncScheduler {
     private final OrderRepository orderRepository;
     private final OrderCompletionService orderCompletionService;
     private final PythonAgentClient pythonAgentClient;
+    private final com.lth.ecommerceagent.tenant.StoreRepository storeRepository;
 
     private final boolean enabled;
     private final int batchSize;
@@ -48,12 +49,14 @@ public class OrderAddressSyncScheduler {
             OrderRepository orderRepository,
             OrderCompletionService orderCompletionService,
             PythonAgentClient pythonAgentClient,
+            com.lth.ecommerceagent.tenant.StoreRepository storeRepository,
             @Value("${order.address-sync.enabled:true}") boolean enabled,
             @Value("${order.address-sync.batch-size:50}") int batchSize,
             @Value("${order.address-sync.sla-days:7}") int slaDays) {
         this.orderRepository = orderRepository;
         this.orderCompletionService = orderCompletionService;
         this.pythonAgentClient = pythonAgentClient;
+        this.storeRepository = storeRepository;
         this.enabled = enabled;
         this.batchSize = batchSize;
         this.slaDays = slaDays;
@@ -64,9 +67,10 @@ public class OrderAddressSyncScheduler {
         if (!enabled) {
             return;
         }
-        healCheck();
-        paymentCheck();
-        escalateOverdue();
+        storeRepository.findByStatusOrderByCreatedAt("ACTIVE").forEach(store ->
+                com.lth.ecommerceagent.tenant.TenantContext.runAsSystem(store.getCompanyId(),store.getId(),()->{
+                    healCheck(); paymentCheck(); escalateOverdue();
+                }));
     }
 
     /** 向平台复核地址是否补全：已补全则自动流转状态（模式无关，模拟器=官方 API 替身）。 */

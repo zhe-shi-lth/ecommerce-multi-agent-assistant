@@ -10,6 +10,10 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Entity
 @Table(name = "after_sales_orders")
 public class AfterSalesOrder {
+    @Column(name="company_id", nullable=false) private Long companyId;
+    @Column(name="store_id", nullable=false) private Long storeId;
+    @jakarta.persistence.PrePersist void assignTenant(){if(companyId==null)companyId=com.lth.ecommerceagent.tenant.TenantContext.companyId();if(storeId==null)storeId=com.lth.ecommerceagent.tenant.TenantContext.storeId();}
+    public Long getCompanyId(){return companyId;} public Long getStoreId(){return storeId;}
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long id;
     @Column(name = "after_sale_no", nullable = false, unique = true, length = 80) private String afterSaleNo;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "order_id") private Order order;

@@ -23,6 +23,7 @@ import com.lth.ecommerceagent.python.PythonOperationPlanResult;
  */
 @RestController
 @RequestMapping("/api/orchestration")
+@org.springframework.security.access.prepost.PreAuthorize("hasAuthority('PERM_CONTENT_GENERATE') or hasAuthority('PERM_CONTENT_EXECUTE')")
 public class OrchestrationController {
 
     private final PythonAgentClient pythonAgentClient;

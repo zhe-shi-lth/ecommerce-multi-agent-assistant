@@ -11,16 +11,19 @@ import org.springframework.data.repository.query.Param;
 
 public interface InventoryRepository extends JpaRepository<Inventory, Long> {
 
-    @Override
     @EntityGraph(attributePaths = "product")
-    List<Inventory> findAll();
-
-    @Override
-    @EntityGraph(attributePaths = "product")
-    Optional<Inventory> findById(Long id);
+    List<Inventory> findAllByStoreId(Long storeId);
+    @EntityGraph(attributePaths = "product") List<Inventory> findAllByCompanyId(Long companyId);
+    @EntityGraph(attributePaths = "product") Optional<Inventory> findByIdAndCompanyId(Long id,Long companyId);
 
     @EntityGraph(attributePaths = "product")
-    Optional<Inventory> findByProductId(Long productId);
+    Optional<Inventory> findByIdAndStoreId(Long id,Long storeId);
+
+    @EntityGraph(attributePaths = "product")
+    Optional<Inventory> findByProductIdAndStoreId(Long productId,Long storeId);
+    @Override default List<Inventory> findAll(){return com.lth.ecommerceagent.tenant.TenantContext.hasStoreContext()?findAllByStoreId(com.lth.ecommerceagent.tenant.TenantContext.storeId()):findAllByCompanyId(com.lth.ecommerceagent.tenant.TenantContext.companyId());}
+    @Override default Optional<Inventory> findById(Long id){return com.lth.ecommerceagent.tenant.TenantContext.hasStoreContext()?findByIdAndStoreId(id,com.lth.ecommerceagent.tenant.TenantContext.storeId()):findByIdAndCompanyId(id,com.lth.ecommerceagent.tenant.TenantContext.companyId());}
+    default Optional<Inventory> findByProductId(Long id){return findByProductIdAndStoreId(id,com.lth.ecommerceagent.tenant.TenantContext.storeId());}
 
     /** 原子预留库存：实物不变，只增加占用；可售库存必须足够。 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -34,6 +37,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
                    END,
                    updated_at = CURRENT_TIMESTAMP
              WHERE product_id = :productId
+               AND store_id = :#{T(com.lth.ecommerceagent.tenant.TenantContext).storeId()}
                AND current_stock - reserved_stock >= :quantity
             """, nativeQuery = true)
     int reserveStockIfAvailable(@Param("productId") Long productId, @Param("quantity") int quantity);
@@ -51,6 +55,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
                    END,
                    updated_at = CURRENT_TIMESTAMP
              WHERE product_id = :productId
+               AND store_id = :#{T(com.lth.ecommerceagent.tenant.TenantContext).storeId()}
                AND current_stock >= :quantity
                AND reserved_stock >= :quantity
             """, nativeQuery = true)
@@ -68,6 +73,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
                    END,
                    updated_at = CURRENT_TIMESTAMP
              WHERE product_id = :productId
+               AND store_id = :#{T(com.lth.ecommerceagent.tenant.TenantContext).storeId()}
                AND reserved_stock >= :quantity
             """, nativeQuery = true)
     int releaseReservedStock(@Param("productId") Long productId, @Param("quantity") int quantity);
@@ -84,6 +90,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
                    END,
                    updated_at = CURRENT_TIMESTAMP
              WHERE product_id = :productId
+               AND store_id = :#{T(com.lth.ecommerceagent.tenant.TenantContext).storeId()}
             """, nativeQuery = true)
     int incrementStock(@Param("productId") Long productId, @Param("quantity") int quantity);
 
@@ -99,6 +106,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
                    END,
                    updated_at = CURRENT_TIMESTAMP
              WHERE product_id = :productId
+               AND store_id = :#{T(com.lth.ecommerceagent.tenant.TenantContext).storeId()}
                AND :newStock >= reserved_stock
             """, nativeQuery = true)
     int adjustCurrentStock(@Param("productId") Long productId, @Param("newStock") int newStock);

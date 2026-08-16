@@ -29,7 +29,8 @@ export type IconName =
   | "sparkles"
   | "back"
   | "supplier"
-  | "edit";
+  | "edit"
+  | "store";
 
 const PATHS: Record<IconName, JSX.Element> = {
   new: (
@@ -183,6 +184,14 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M4 20h4l10-10-4-4L4 16v4z" />
       <path d="M13.5 6.5l4 4" />
+    </>
+  ),
+  store: (
+    <>
+      <path d="M4 8l8-4 8 4" />
+      <path d="M5 8v11h14V8" />
+      <path d="M5 8h14" />
+      <path d="M9.5 19v-6h5v6" />
     </>
   ),
 };
