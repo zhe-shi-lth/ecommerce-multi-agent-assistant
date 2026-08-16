@@ -1,0 +1,2 @@
+CREATE TABLE store_freight_rules (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, store_id BIGINT NOT NULL, province VARCHAR(40) NOT NULL, fee NUMERIC(12,2) NOT NULL, CONSTRAINT uk_store_freight_rule UNIQUE(store_id, province), CONSTRAINT fk_store_freight_company FOREIGN KEY(company_id) REFERENCES companies(id), CONSTRAINT fk_store_freight_store FOREIGN KEY(store_id) REFERENCES stores(id), CONSTRAINT ck_store_freight_fee CHECK(fee >= 0));
+CREATE INDEX idx_store_freight_tenant ON store_freight_rules(company_id, store_id);

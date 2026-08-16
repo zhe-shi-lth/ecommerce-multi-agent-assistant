@@ -130,7 +130,7 @@ function normalize(raw: Json): Settings {
   };
 }
 
-export default function Settings() {
+export default function Settings({ readOnly = false }: { readOnly?: boolean }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [busy, setBusy] = useState(false);
@@ -419,10 +419,10 @@ export default function Settings() {
   }
 
   return (
-    <section>
+    <section className={readOnly ? "settings-readonly" : ""}>
       <PageHeader
         title="设置中心"
-        subtitle="按用途组织：上架设置（文案 / 图片 / 视频）、监控模型设置、平台对接（各电商平台的订单接口凭证）。每张模型卡片各自选厂家+模型，Base URL 自动派生，互不借用、互不借 Key。"
+        subtitle={readOnly ? "超级管理员只读查看，配置修改由企业老板完成。" : "按用途组织：上架设置（文案 / 图片 / 视频）、监控模型设置、平台对接（各电商平台的订单接口凭证）。每张模型卡片各自选厂家+模型，Base URL 自动派生，互不借用、互不借 Key。"}
         icon={<Icon name="settings" />}
       />
       {error && <div className="notice notice-error">出错：{error}</div>}
@@ -580,11 +580,11 @@ export default function Settings() {
         </>
       )}
 
-      <div className="export-actions">
+      {!readOnly && <div className="export-actions">
         <button className="btn btn-primary" onClick={handleSave} disabled={busy}>
           {busy ? "保存中…" : "保存设置"}
         </button>
-      </div>
+      </div>}
     </section>
   );
 }

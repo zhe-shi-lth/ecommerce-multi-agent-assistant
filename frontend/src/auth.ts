@@ -14,4 +14,5 @@ export function isAuthed(){return !!getToken()} export function isSuperAdmin(){r
 export function canAccessUserMonitoring(){const i=getIdentity();return i?.role==="SUPER_ADMIN"||i?.role==="PLATFORM_ADMIN"||i?.memberRole==="OWNER"}
 export function canManageOrganization(){const i=getIdentity();return i?.role==="SUPER_ADMIN"||i?.memberRole==="OWNER"||i?.permissions?.includes("MEMBER_MANAGE")===true}
 export function canAccess(permission:string){const i=getIdentity();return i?.role==="SUPER_ADMIN"||i?.memberRole==="OWNER"||i?.permissions?.includes(permission)===true}
-export function canManageSettings(){const i=getIdentity();return i?.role==="SUPER_ADMIN"||i?.memberRole==="OWNER"}
+export function canManageSettings(){const i=getIdentity();return i?.role!=="SUPER_ADMIN"&&i?.memberRole==="OWNER"}
+export function canManageStoreSettings(){const i=getIdentity();return i?.role!=="SUPER_ADMIN"&&i?.memberRole==="OWNER"}

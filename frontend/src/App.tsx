@@ -11,11 +11,13 @@ import PurchaseRestock from "./pages/PurchaseRestock";
 import Suppliers from "./pages/Suppliers";
 import NewListing from "./pages/NewListing";
 import Settings from "./pages/Settings";
+import FreightRules from "./pages/FreightRules";
 import Profile from "./pages/Profile";
 import Simulator from "./pages/Simulator";
 import Login from "./pages/Login";
 import Organization from "./pages/Organization";
-import { applyAuth, canAccess, canManageOrganization, canManageSettings, clearToken, getIdentity, isAuthed, isSuperAdmin, type AuthResult } from "./auth";
+import WorkspaceHome from "./pages/WorkspaceHome";
+import { applyAuth, canAccess, canManageOrganization, canManageSettings, canManageStoreSettings, clearToken, getIdentity, isAuthed, isSuperAdmin, type AuthResult } from "./auth";
 import { api } from "./api/client";
 import { onAppError } from "./api/errorBus";
 import AlertModal from "./components/AlertModal";
@@ -107,6 +109,10 @@ export default function App() {
           <span>电商多 Agent</span>
         </h1>
         <nav>
+          <NavLink to="/home" className="nav-link nav-home-link">
+            <Icon name="dashboard" />
+            工作台
+          </NavLink>
           {(canAccess("CONTENT_GENERATE") || canAccess("PRODUCT_VIEW")) && <div className="nav-group">核心流程</div>}
           {canAccess("CONTENT_GENERATE") && <NavLink to="/new-listing" className="nav-link">
             <Icon name="new" />
@@ -116,7 +122,12 @@ export default function App() {
             <Icon name="plans" />
             运营计划
           </NavLink>}
-          {(canAccess("PRODUCT_VIEW") || canAccess("INVENTORY_VIEW") || canAccess("ORDER_VIEW") || canAccess("PURCHASE_CREATE") || canAccess("SUPPLIER_MANAGE")) && <div className="nav-group">经营数据</div>}
+          {canAccess("ORDER_VIEW") && <div className="nav-group">经营看板</div>}
+          {canAccess("ORDER_VIEW") && <NavLink to="/dashboard" className="nav-link">
+            <Icon name="dashboard" />
+            销售监控
+          </NavLink>}
+          {(canAccess("PRODUCT_VIEW") || canAccess("INVENTORY_VIEW") || canAccess("ORDER_VIEW") || canAccess("PURCHASE_CREATE") || canAccess("SUPPLIER_MANAGE")) && <div className="nav-group">业务管理</div>}
           {canAccess("PRODUCT_VIEW") && <NavLink to="/products" className="nav-link">
             <Icon name="products" />
             商品
@@ -129,10 +140,6 @@ export default function App() {
             <Icon name="orders" />
             订单
           </NavLink>}
-          {canAccess("ORDER_VIEW") && <NavLink to="/dashboard" className="nav-link">
-            <Icon name="dashboard" />
-            销售监控
-          </NavLink>}
           {canAccess("PURCHASE_CREATE") && <NavLink to="/purchase-restock" className="nav-link">
             <Icon name="purchase" />
             采购补货
@@ -142,17 +149,18 @@ export default function App() {
             进货商家
           </NavLink>}
           {isSuperAdmin() && <>
-            <div className="nav-group">工具</div>
+            <div className="nav-group">平台管理</div>
             <NavLink to="/simulator" className="nav-link">
               <Icon name="simulator" />
               平台模拟
             </NavLink>
           </>}
-          {canManageSettings() && <div className="nav-group">配置</div>}
-          {canManageSettings() && <NavLink to="/settings" className="nav-link">
+          {(canManageSettings() || isSuperAdmin() || canManageStoreSettings()) && <div className="nav-group">系统配置</div>}
+          {(canManageSettings() || isSuperAdmin()) && <NavLink to="/settings" className="nav-link">
             <Icon name="settings" />
             设置中心
           </NavLink>}
+          {(canManageStoreSettings() || isSuperAdmin()) && <NavLink to="/freight-rules" className="nav-link"><Icon name="purchase" />运费模板</NavLink>}
           </nav>
         </aside>
       <div className="main-col">
@@ -183,18 +191,20 @@ export default function App() {
         />
         <main className="content">
         <Routes>
-          <Route path="/" element={<Navigate to="/operation-plans" replace />} />
+          <Route path="/" element={<Navigate to="/home" replace />} />
+          <Route path="/home" element={<WorkspaceHome />} />
           <Route path="/operation-plans" element={<OperationPlans />} />
           <Route path="/operation-plans/:id" element={<OperationPlanDetail />} />
           <Route path="/products" element={<Products />} />
           <Route path="/inventories" element={<Inventories />} />
           <Route path="/orders" element={<Orders />} />
           <Route path="/orders/:id" element={<OrderDetail />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={canAccess("ORDER_VIEW") ? <Dashboard /> : <Navigate to="/" replace />} />
           <Route path="/purchase-restock" element={<PurchaseRestock />} />
           <Route path="/suppliers" element={<Suppliers />} />
           <Route path="/simulator" element={isSuperAdmin() ? <Simulator /> : <Navigate to="/" replace />} />
-          <Route path="/settings" element={canManageSettings() ? <Settings /> : <Navigate to="/" replace />} />
+          <Route path="/settings" element={(canManageSettings() || isSuperAdmin()) ? <Settings readOnly={isSuperAdmin()} /> : <Navigate to="/" replace />} />
+          <Route path="/freight-rules" element={(canManageStoreSettings() || isSuperAdmin()) ? <FreightRules readOnly={isSuperAdmin()} /> : <main className="page-content"><section className="card"><h2>暂无访问权限</h2><p className="muted">运费模板属于店铺经营配置，请使用企业老板账号，并先进入具体店铺后再配置。</p></section></main>} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/organization" element={canManageOrganization() ? <Organization /> : <Navigate to="/" replace />} />
           <Route path="/login" element={<Navigate to="/" replace />} />

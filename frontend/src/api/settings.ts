@@ -8,6 +8,9 @@ export const saveSettings = (body: Json) =>
 export interface StorePlatformConfigView {platform:string;configured:boolean;enabled:boolean;credentialFields:string[];updatedAt:string|null}
 export const getStorePlatformConfigs=()=>api.get<StorePlatformConfigView[]>("/store-platform-configs");
 export const saveStorePlatformConfig=(platform:string,credentials:Record<string,string>,enabled:boolean)=>api.put<StorePlatformConfigView>(`/store-platform-configs/${platform}`,{credentials,enabled});
+export interface FreightRule { province: string; fee: number }
+export const getFreightRules=()=>api.get<{rules:FreightRule[]}>('/freight-rules');
+export const saveFreightRules=(rules:FreightRule[])=>api.put<{rules:FreightRule[]}>('/freight-rules',{rules});
 
 // 各能力当前是否可用（纯本地判定：部署开关 + 设置中心 + 是否填 Key，不发网络请求）。
 export const getCapabilities = () =>

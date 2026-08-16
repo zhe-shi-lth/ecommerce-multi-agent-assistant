@@ -13,6 +13,7 @@ import { PLATFORMS, platformLabel, platformMatches } from "../platforms";
 import LineChart from "../components/LineChart";
 import PageHeader from "../components/PageHeader";
 import { errMsg } from "../utils/errMsg";
+import { canAccess } from "../auth";
 
 type Metric = "revenue" | "units";
 type Period = "day" | "week" | "month" | "year";
@@ -80,16 +81,35 @@ export default function Dashboard() {
 
   // ① 监控面板：仅依赖 Java 业务数据，独立加载且永远秒开。
   useEffect(() => {
-    Promise.all([listDailySales(), getInventories(), getOperationPlans(), getProducts(), getInsufficientSummary()])
-      .then(([s, inv, ps, ps2, ins]) => {
-        setSales(s);
-        setInventories(inv);
-        setPlans(ps);
-        setProducts(ps2);
-        setInsufficient(ins);
-      })
-      .catch((e) => setError(errMsg(e)))
-      .finally(() => setLoading(false));
+    const load = async () => {
+      try {
+        const [salesResult, plansResult, productsResult, insufficientResult] = await Promise.allSettled([
+          listDailySales(),
+          getOperationPlans(),
+          getProducts(),
+          getInsufficientSummary(),
+        ]);
+        if (salesResult.status === "rejected") throw salesResult.reason;
+        setSales(salesResult.value);
+        if (plansResult.status === "fulfilled") setPlans(plansResult.value);
+        if (productsResult.status === "fulfilled") setProducts(productsResult.value);
+        if (insufficientResult.status === "fulfilled") setInsufficient(insufficientResult.value);
+
+        // 库存是销售监控的可选扩展权限，没有库存权限时不应阻塞销售数据展示。
+        if (canAccess("INVENTORY_VIEW")) {
+          try {
+            setInventories(await getInventories());
+          } catch {
+            setInventories([]);
+          }
+        }
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
   }, []);
 
   // 从订单详情跳转过来时，滚动到对应商品并短暂高亮其库存不足警告。
@@ -105,6 +125,11 @@ export default function Dashboard() {
 
   // ② 监控大模型能力探测（Python，纯本地判定、瞬间返回，不阻塞面板）。
   useEffect(() => {
+    if (!canAccess("INVENTORY_VIEW")) {
+      setMonitorAvailable(false);
+      setWarnLoading(false);
+      return;
+    }
     getCapabilities()
       .then((c) => setMonitorAvailable(c?.monitor?.available ?? false))
       .catch(() => setMonitorAvailable(false));
@@ -112,6 +137,10 @@ export default function Dashboard() {
 
   // ③ 库存预警（Python，独立加载；大模型不可用则走红线降级，仍显示警告）。
   useEffect(() => {
+    if (!canAccess("INVENTORY_VIEW")) {
+      setWarnLoading(false);
+      return;
+    }
     setWarnLoading(true);
     setWarnError(null);
     getInventoryWarnings()

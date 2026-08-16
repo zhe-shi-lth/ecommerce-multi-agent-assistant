@@ -7,7 +7,7 @@ public class StorePlatformConfigController{
  private final StorePlatformConfigRepository repo; private final CredentialCipher cipher; private final ObjectMapper json;
  public StorePlatformConfigController(StorePlatformConfigRepository r,CredentialCipher c,ObjectMapper j){repo=r;cipher=c;json=j;}
  public record ConfigRequest(Map<String,String> credentials,Boolean enabled){} public record ConfigView(String platform,boolean configured,boolean enabled,Set<String> credentialFields,java.time.Instant updatedAt){}
- @GetMapping @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('OWNER')") public List<ConfigView> list(){return repo.findByStoreIdOrderByPlatform(TenantContext.storeId()).stream().map(this::view).toList();}
+ @GetMapping @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('OWNER')") public List<ConfigView> list(){if(TenantContext.principal()==null||TenantContext.principal().storeId()==null)return List.of();return repo.findByStoreIdOrderByPlatform(TenantContext.storeId()).stream().map(this::view).toList();}
  @PutMapping("/{platform}") @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('OWNER')") public ConfigView save(@PathVariable String platform,@RequestBody ConfigRequest request){
   if(!PLATFORMS.contains(platform))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"不支持的平台");StorePlatformConfig c=repo.findByStoreIdAndPlatform(TenantContext.storeId(),platform).orElseGet(StorePlatformConfig::new);
   c.setCompanyId(TenantContext.companyId());c.setStoreId(TenantContext.storeId());c.setPlatform(platform);

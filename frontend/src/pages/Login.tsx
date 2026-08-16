@@ -85,11 +85,6 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="login-hint">
-            超级管理员：<code>admin@shop.local</code> / <code>admin123</code>
-            <br />
-            普通用户：<code>user@shop.local</code> / <code>user123</code>
-          </p>
         </div>
       </main>
     </div>

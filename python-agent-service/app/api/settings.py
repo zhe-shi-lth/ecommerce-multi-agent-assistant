@@ -21,9 +21,9 @@ router = APIRouter(prefix="/agent/ecommerce", tags=["settings"])
 
 _CAPABILITIES = ("llm", "image", "video", "monitor")
 
-def _require_platform_config(request: Request) -> None:
+def _require_platform_config(request: Request, write: bool = False) -> None:
     user = getattr(request.state, "user", {})
-    if user.get("role") in {"SERVICE", "SUPER_ADMIN"} or user.get("memberRole") == "OWNER":
+    if user.get("role") == "SERVICE" or user.get("memberRole") == "OWNER" or (user.get("role") == "SUPER_ADMIN" and not write):
         return
     raise HTTPException(status_code=403, detail="只有超级管理员、企业老板或拥有平台设置权限的成员可以操作设置中心")
 
@@ -144,7 +144,7 @@ def capabilities_endpoint(request: Request) -> dict:
 
 @router.put("/settings")
 def put_settings_endpoint(patch: SettingsPatch, request: Request) -> dict:
-    _require_platform_config(request)
+    _require_platform_config(request, write=True)
     raw = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
     raw.pop("platform_api", None)
     clean = _validate(raw)

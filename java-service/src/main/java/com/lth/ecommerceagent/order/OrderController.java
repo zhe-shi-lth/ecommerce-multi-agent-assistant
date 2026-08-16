@@ -22,6 +22,7 @@ import com.lth.ecommerceagent.python.PythonAgentClient;
 import com.lth.ecommerceagent.python.PythonOrderVerifyRequest;
 import com.lth.ecommerceagent.python.PythonOrderVerifyResult;
 import com.lth.ecommerceagent.python.PythonPaymentVerifyResult;
+import com.lth.ecommerceagent.freight.FreightService;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -36,18 +37,20 @@ public class OrderController {
     private final InventoryRepository inventoryRepository;
     private final PythonAgentClient pythonAgentClient;
     private final OrderCompletionService orderCompletionService;
+    private final FreightService freightService;
 
     public OrderController(
             OrderRepository orderRepository,
             ProductRepository productRepository,
             InventoryRepository inventoryRepository,
             PythonAgentClient pythonAgentClient,
-            OrderCompletionService orderCompletionService) {
+            OrderCompletionService orderCompletionService, FreightService freightService) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.inventoryRepository = inventoryRepository;
         this.pythonAgentClient = pythonAgentClient;
         this.orderCompletionService = orderCompletionService;
+        this.freightService = freightService;
     }
 
     @PostMapping
@@ -275,7 +278,7 @@ public class OrderController {
         order.setReceiverDetail(request.receiverDetail());
         order.setBuyerNick(request.buyerNick());
         if (request.payment() != null) order.setPayment(request.payment());
-        if (request.postFee() != null) order.setPostFee(request.postFee());
+        order.setPostFee(request.postFee() != null ? request.postFee() : freightService.fee(order.getReceiverProvince()));
         order.setLogisticsCompany(request.logisticsCompany());
         order.setWaybillNo(request.waybillNo());
         order.setEncrypted(request.encrypted() != null && request.encrypted());
