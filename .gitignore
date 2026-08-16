@@ -10,3 +10,26 @@ java-service/target/
 backups/
 frontend/test-results/
 frontend/playwright-report/
+
+# Local runtime data and logs
+data/
+*.log
+*.err
+frontend/dbg_*.png
+frontend/verify_debug.cjs
+
+# Python local environments and caches
+python-agent-service/.venv/
+python-agent-service/.pytest_cache/
+python-agent-service/**/__pycache__/
+
+# Java / frontend build outputs
+frontend/node_modules/
+frontend/dist/
+java-service/.mvn/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.iml
+Thumbs.db

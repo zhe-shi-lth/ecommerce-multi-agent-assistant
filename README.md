@@ -1,548 +1,260 @@
-# 电商超级个体 · 多 Agent 运营助手
+# 电商多 Agent 运营助手
 
-一个面向「电商超级个体」的多 Agent 运营助手，目标为 **大框架、小闭环**。第二期已在稳定主链路之上逐个增强 Agent 真实能力（可插拔多厂家 LLM 编排、分类知识库 RAG、LLM 图片视觉审核、库存需求预测、物流异常 + 售后联动、Supervisor 动态路由与失败重试、前端人工确认/驳回闭环）。
+一个面向多企业、多店铺电商团队的运营后台，覆盖**内容生产、平台发布前审核、订单履约、库存管理、采购补货和权限隔离**。
 
-> **当前版本（2026-08-13）**：系统已完成内容生产与发布前门控、订单履约、采购补货、库存并发控制、平台任务幂等重试、操作审计，以及公司/店铺/成员/角色/数据隔离。小红书、淘宝、抖音的官方发布、拉单、发货回传等适配器保留统一接口，接入商家开放平台凭证并完成官方字段映射后即可转为真实业务。完整完成度和用户操作方法见 [系统现状与用户使用手册](docs/SYSTEM_STATUS_AND_USER_GUIDE.md)。
+项目的核心目标不是让 Agent 自由聊天，而是把模型能力放进可控的业务流程中：
 
-- **Python 多 Agent 服务**：Supervisor 编排 4 个业务 Agent（选品规划 / 图像创意 / 库存采购 / 订单履约）结构化输出运营计划；另有 2 个监控 Agent（库存预警 `InventoryMonitorAgent` / 订单复核 `OrderMonitorAgent`，线2）。
-- **Java Spring Boot 业务服务**：PostgreSQL 落库，提供商品 / 库存 / 订单 / 运营计划 / Agent 执行记录等 REST API。
-- **Java ↔ Python 双向 HTTP 闭环**：Java 编排入口加载业务数据并调用 Python 生成计划；Python 生成后通过 Tool API 把计划与执行明细写回 Java。
-- **多企业与多店铺**：用户通过企业成员关系获得老板、运营、采购或仓库角色；业务数据、审计记录和平台凭证按企业/店铺隔离。
+> **业务状态由代码和数据库负责，Agent 负责理解、生成、分析和建议；关键节点必须经过权限校验、人工确认、审计和可恢复处理。**
 
-> **真实结果优先**：文案、图片和视频走设置中心配置的真实模型；缺 Key 或调用失败时直接提示，不返回模板文案、假图片或假视频。规则模式和订单模拟仅在用户或部署显式选择时启用。前端通过 Docker Compose 内 nginx 反代访问 Java，无需改 Java CORS。
->
-> **订单数据同样「模拟 ↔ 真实」可切换**：`DATA_SOURCE=mock`（默认）由本地造数，产出与真实平台拉单**完全同构**的订单（同样带平台单号 / 收件人 / 金额 / 物流）；切到 `real` 后 Java 经 Python 平台适配器调各平台开放 API 取单，库表结构、Agent 逻辑、前端页面都不用改。真实模式不会回退模拟数据；平台接口失败会形成失败任务并提示处理。
+当前项目已经完成内部业务骨架和两条主业务线的本地闭环。小红书、淘宝、抖音的官方 OAuth、字段映射和商家联调仍是接入生产前的主要工作。
 
----
+## 项目亮点
 
-## 架构与边界
+- **固定 Workflow + 多 Agent**：使用确定性的业务流程串联多个专业 Agent，而不是让模型直接决定订单或库存状态。
+- **Java / Python 分层**：Java 负责业务规则、权限、事务和落库；Python 负责 Agent 编排、模型调用和结构化输出。
+- **真实结果优先**：模型或平台凭证缺失时明确报错，不伪造文案、图片、视频或平台成功结果。
+- **多租户隔离**：企业、店铺、成员、权限、商品、订单、库存、采购和平台凭证按租户上下文隔离。
+- **可审计、可恢复**：关键状态变化记录审计；平台任务支持幂等、重试、失败闭合和人工对账。
+- **API 可替换**：平台能力通过统一适配器接入，接入真实开放平台时不需要重写 Java 业务状态机。
 
-```
-┌────────────────────────┐         POST /api/orchestration/generate         ┌────────────────────────┐
-│   Java Spring Boot     │ ───────────────────────────────────────────────▶ │   Python FastAPI       │
-│   (业务 + 落库)         │                                                    │   (多 Agent 编排)        │
-│                        │ ◀──── POST /api/operation-plans + /api/agent-runs ┤                        │
-│  products / inventories│         (Python 调 Java 写回结果)                  │  Supervisor + 4 Agents │
-│  / orders / operation_ │                                                    │                        │
-│  plans / agent_runs    │ ───────────── PostgreSQL (Flyway 建表) ──────────▶│                        │
-└────────────────────────┘                                                    └────────────────────────┘
-```
+## 产品界面
 
-| 职责 | Java 侧 | Python 侧 |
-| --- | --- | --- |
-| 业务数据持久化 | ✅ Entity / Repository / Flyway | ❌（不持库，可独立运行） |
-| 运营计划生成 | 编排入口（调 Python） | ✅ Supervisor 固定顺序编排 4 Agent |
-| 结果落库 | ✅ REST Tool API | ✅ 调用 Java 写回；写回失败记录错误并中断，不伪造成功 |
-| 对外 REST API | ✅ 业务 + 编排 + 查询 | ✅ `POST /agent/ecommerce/operation-plan` |
+### 登录入口
 
----
+系统使用账号登录，不在页面展示默认账号或密码。
 
-## 目录结构
+![系统登录页](docs/assets/screenshots/login.png)
 
-```
-.
-├── docker-compose.yml          # 全栈：PostgreSQL + Java + Python + 前端(nginx 反代)
-├── .env / .env.example         # 数据库与数据源配置
-├── java-service/               # Spring Boot 业务服务 (JDK 21)
-│   └── src/main/java/com/lth/ecommerceagent/
-│       ├── product/ inventory/ order/ operation/ agent/   # 各域 Controller/Entity/Repository/DTO
-│       ├── orchestration/      # 编排入口 OrchestrationController
-│       └── python/             # PythonAgentClient (Java 调 Python)
-├── python-agent-service/       # FastAPI 多 Agent 服务 (Python 3.11)
-│   └── app/
-│       ├── agents/             # supervisor + 4 业务 agent + 2 监控 agent（InventoryMonitorAgent / OrderMonitorAgent）
-│       ├── schemas/            # Pydantic 结构化输出
-│       ├── tools/java_api_client.py   # JavaApiClient (Python 调 Java)
-│       └── api/operation_plan.py      # 运营计划端点
-└── scripts/demo_e2e.py         # 端到端小闭环验证脚本
+### 角色化工作台
+
+登录后进入工作台，页面根据超级管理员、企业老板或普通员工的身份和权限展示可用入口。
+
+![角色化工作台](docs/assets/screenshots/workspace.png)
+
+### 新品上架流程
+
+新品上架按步骤组织平台选择、内容要求、图片审核、文案审核、视频生成和最终发布。
+
+![新品上架流程](docs/assets/screenshots/new-listing.png)
+
+## 功能总览
+
+### 线 1：内容生产与发布
+
+```text
+选择企业 / 店铺 / 商品 / 平台
+        ↓
+填写 Content Brief 和图片、视频、文案要求
+        ↓
+图片生成（可选）→ 视频生成（可引用已确认图片）→ 文案生成
+        ↓
+各平台独立审核
+        ↓
+运营计划审核
+        ↓
+平台发布任务
 ```
 
----
+支持小红书、淘宝、抖音同时生成内容。不同平台的内容相互独立，不会因为某个平台失败而伪造其他平台成功。
 
-## 已增强能力（第二期）
+当前已具备：
 
-在稳定主链路之上逐步骤增强 Agent 真实能力，每一步均 **向后兼容、Java 落库契约不变、前端自动可见**：
+- Content Brief 以及图片、视频、文案分项要求
+- 图片、视频、文案生成门控
+- 图片作为视频素材的关联关系
+- 人工审核、驳回和重新生成
+- 发布适配器、幂等键、并发认领、失败重试、超时识别和人工对账
 
-| 步骤 | 增强 | 关键设计 |
-| --- | --- | --- |
-| 0 | 接入可插拔多厂家 LLM | 5 个 Agent（Supervisor + 4 业务 Agent）结构化输出复用 Pydantic Schema；LLM 由设置中心运行时切换厂家（通义千问/DeepSeek/本地 Ollama 等）；LLM 调用失败直接报错（不静默降级到规则），由前端弹窗提示；关闭或选「规则」模式时显式走确定性规则实现 |
-| 0.5 | 前端只读 SPA | React + Vite，查看计划/四类产出/Agent trace/商品库存订单 |
-| 1 | 商品规划增强 | SEO 关键词 + 淘宝/抖音/小红书多平台文案 |
-| 2 | 分类知识库 RAG | 本地 Markdown 知识库 + 内存 Chroma 向量检索，注入商品/图片 Agent（可选，关 RAG 不影响主链路） |
-| 3 | 图片视觉审核 | 已配置的 LLM 对创意方案做合规/质量审核，产出 `image_review_result`（可选，关则走规则启发式） |
-| 4 | 库存需求预测 | 确定性 `compute_forecast`：日均需求/预计售罄天数/补货量/风险等级；LLM 仅写可读原因，数字由预测决定 |
-| 5 | 物流异常 + 售后联动 | 本地确定性物流风险检测（未付款/地址不全/库存不足/大单分批/库存紧张/需复核）+ 处理建议 + 售后建议 |
-| 6 | Supervisor 动态路由 + 前端确认 | 按 `trigger_type` 条件路由（演示分支 `INVENTORY_REVIEW` 仅库存+履约）；LLM 调用失败重试 1 次仍失败则直接报错（不降级）；前端可对计划「确认/驳回」并落库 |
+待完成：小红书、淘宝、抖音官方 OAuth、真实发布请求字段映射、限流处理和商家账号联调。
 
----
+### 线 2：订单履约与库存补货
 
-## 运行前提
+```text
+平台订单 → 付款 / 地址 / 库存检查 → 库存预留与并发扣减
+       → 仓库发货 → 物流信息 → 售后和审计
 
-> 本机实测踩坑点，务必先看，否则编译 / 连接会失败。
+进货商家 → 采购申请 → 审批 → 已下单 → 待入库
+       → 分批收货 → 已入库 / 短收关闭
+```
 
-### 1. JDK 21（必备）
-项目使用 JDK 21。运行前请确保 `JAVA_HOME` 指向你的 JDK 21 安装目录：
+当前已具备：
+
+- 未付款、地址不全、库存不足和人工复核闭环
+- 订单库存预留和数据库级原子扣减，避免并发超卖
+- 供应商、采购申请、审批、收货、入库和采购成本记录
+- 按省份配置买家运费模板，订单记录实际快递费用
+- 库存流水、采购收货记录和业务审计
+
+待完成：各平台真实订单拉取、物流回传、发货 API 和售后同步联调。
+
+## 系统架构
+
+```text
+┌──────────────────────┐
+│ React + Vite 前端     │
+│ 工作台 / 业务页面 / 权限入口 │
+└──────────┬───────────┘
+           │ HTTP / JWT
+┌──────────▼───────────┐
+│ Java Spring Boot      │
+│ 业务规则 / 权限 / 事务 / API │
+└──────────┬───────────┘
+           │ PostgreSQL
+┌──────────▼───────────┐
+│ PostgreSQL + Flyway   │
+│ 业务数据 / 租户数据 / 审计 │
+└──────────────────────┘
+
+Java ── HTTP ──▶ Python FastAPI
+                  Agent 编排 / LLM / RAG / 平台适配器
+```
+
+### Java 服务
+
+负责企业、店铺、成员和权限，以及商品、库存、订单、采购、状态机、事务、并发控制、平台任务和审计记录。
+
+### Python 服务
+
+负责 Supervisor 和业务 Agent 编排、模型调用、Pydantic 结构化输出、分类知识库 RAG、平台适配器和 Agent trace。
+
+## Agent 设计
+
+```text
+Supervisor
+   ├── Product Planning Agent
+   ├── Image Creative Agent
+   ├── Inventory & Purchase Agent
+   └── Order Fulfillment Agent
+
+Line 2 Monitor
+   ├── Inventory Monitor Agent
+   └── Order Monitor Agent
+```
+
+这个设计来自对 Multi-Agent 框架的学习：
+
+| 抽象 | 在本项目中的理解 |
+| --- | --- |
+| LangGraph / 状态机 | 用明确状态、节点和边控制高可靠业务流程 |
+| CrewAI / 角色协作 | 每个 Agent 负责清晰的专业职责 |
+| AutoGen / 专家讨论 | 适合未来放在高风险决策或质量复核节点 |
+| Magnetic-One / Supervisor | 根据触发类型选择需要执行的 Agent |
+| OpenAI Agents SDK | Agent 使用 Tool 获取业务上下文，不直接操作数据库 |
+| AgentScope | 为未来高并发、异步任务和分布式 Agent 扩展提供参考 |
+
+本项目的选型原则：
+
+1. 简单任务不为了“多 Agent”而拆分。
+2. 固定流程优先使用代码状态机。
+3. 模型只输出结构化建议，不直接越权修改核心状态。
+4. 人工审核、数据库事务和审计必须在 Agent 之外保留。
+
+## 用户与企业体系
+
+```text
+超级管理员 → 创建企业并指定企业老板
+                    ↓
+             企业老板创建多个店铺
+                    ↓
+             员工加入一个或多个店铺
+                    ↓
+             老板按权限多选分配能力
+```
+
+- 超级管理员：管理企业、平台级账号和平台模拟。
+- 企业老板：管理店铺、成员、权限、模型设置、平台凭证和业务数据。
+- 普通员工：只能使用当前店铺中被分配的权限。
+- 登录后进入角色化工作台，快捷入口根据权限动态展示。
+- “组织与成员”属于企业级管理，放在右上角账号菜单；店铺经营功能放在左侧导航。
+- 平台凭证按店铺隔离，模型设置按企业维护。
+
+## 当前完成度
+
+### 已完成
+
+- React + Vite 前端工作台和权限导航
+- Java Spring Boot 业务服务
+- Python FastAPI 多 Agent 服务
+- PostgreSQL + Flyway 数据落库
+- 企业、店铺、成员、权限和多租户隔离
+- 内容生成、审核和发布前门控
+- 订单履约、库存并发控制和采购补货闭环
+- 运费模板和订单实际快递费用
+- Agent trace、平台任务、库存流水和业务审计
+- Docker Compose 本地全栈运行
+
+### 仍需外部环境完成
+
+- 淘宝、抖音、小红书真实开放平台 API
+- OAuth 授权、回调和凭证正式联调
+- 真实订单拉取和物流单号回传
+- 生产域名、HTTPS、对象存储、集中日志、告警和备份
+- 真实商家账号验收、平台限流压测和生产容量测试
+
+## 快速开始
+
+### Docker Compose
 
 ```bash
-# 示例（请按你的实际安装路径调整）
-export JAVA_HOME="/path/to/jdk-21"
-export PATH="$JAVA_HOME/bin:$PATH"
-java -version   # 确认 21.x
-```
-
-### 2. Maven
-已安装 Maven 时直接运行（本文档采用此方式，PowerShell 下直接可用）：
-
-```bash
-cd java-service
-mvn spring-boot:run
-```
-
-未单独安装 Maven 也可用项目自带的 Maven Wrapper：
-- Linux / macOS / Git Bash：`./mvnw spring-boot:run`
-- Windows PowerShell：`.\mvnw.cmd spring-boot:run`（PowerShell 不会从当前目录直接运行命令，需 `.\` 前缀）
-
-> **Windows + Git Bash 注意**：在 Git Bash 中直接敲 `mvn` 可能调用 Unix 启动脚本并报告
-> `ClassNotFoundException: org.codehaus.plexus.classworlds.launcher.Launcher`；此时改用 `./mvnw` 或 `mvn.cmd`。
-
-### 3. Docker / PostgreSQL
-需要 Docker 且能拉取 `postgres:16` 镜像（如所在网络需配置镜像源，请自行设置 Docker `registry-mirrors`）：
-
-```bash
-docker compose up -d postgres
-```
-
-> 连接信息见 `.env`：`ecommerce_agent / ecommerce / ecommerce_password`，端口 `5432`。
-> Flyway 在 Java 启动时自动建 6 张表（`products / inventories / orders / operation_plans / agent_runs / flyway_schema_history`）。
-
-### 4. Python
-```bash
-cd python-agent-service
-uv sync
-uv run fastapi dev app/main.py   # 端口 8000，无需数据库
-```
-
-### 5. 设置中心（模型配置与店铺平台凭证）
-
-前端「设置」页集中管理模型和平台凭证。文案、图片、视频等模型配置由 Python 服务加密持久化；小红书、淘宝、抖音凭证由 Java 服务按当前企业/店铺加密保存到 `store_platform_configs`。读取接口只返回配置状态、字段名或掩码，不返回密钥明文；生产环境缺少独立加密密钥时服务拒绝启动。
-
-设置中心共 **4 张模型卡 + 2 张独立非 LLM 卡**：
-
-| 卡片 | 用途 | 是否 LLM | 说明 |
-| --- | --- | --- | --- |
-| 文案生成（LLM） | 写文案 / 写提示词 | 是 | 文本大模型，多厂家 OpenAI 兼容 |
-| 商品图片生成（出图） | 真实出图（文生图 / 图生图） | 是（独立模型） | qwen-image，与文本 LLM 互不相干 |
-| 视频生成 | 生成宣传短视频 | 是（独立模型） | 万相 / 欢乐马等 |
-| 库存监控（监控模型） | 线2 库存智能预警 | 可选 | 关闭 / 未配 Key 时按可售天数红线降级，不报错 |
-| **订单监控（地址复核）** | 线2 订单维度复核 | **否** | 独立非 LLM 配置：`mode`（demo/real）+ 演示通过率滑条 |
-| **平台对接（订单数据源）** | 配置当前店铺的真实平台凭证 | **否** | 各平台 `app_key` / `app_secret` / `endpoint` / 店铺 ID / 授权令牌按店铺隔离并加密落库；Python 使用服务间租户上下文按需读取，不使用全局凭证兜底 |
-
-各卡片**互不借用**：每张卡片的 Key / 模型 / base_url 只来自本卡片，不回退其他卡片、不读 `.env`（环境变量的兜底默认值见下文与各能力小节）。前端据厂家的模型目录渲染下拉，`base_url` 由厂家+模型派生（仅 custom 允许手填）。
-
-> 本地起 Ollama 作为后端（可选）：
-> ```bash
-> ollama pull qwen2.5:latest
-> ollama list
-> ```
-> 在设置中心 LLM 卡片选「Ollama（本地）」并填 `http://localhost:11434/v1` 即可，无需 Key。
-
-Agent 的 LLM 由**设置中心（前端「设置」页）运行时配置并持久化**，支持多厂家 OpenAI 兼容后端：
-
-- 云端：通义千问（DashScope，默认 fallback 厂家）、DeepSeek、Kimi（月之暗面）、智谱 GLM、OpenAI、Gemini
-- 本地：Ollama（无需 API Key，端点 `http://localhost:11434/v1`）
-- 其他：自定义 OpenAI 兼容端点；以及「规则模式」（确定性输出，不调用任何 LLM）
-
-未启用 LLM 或选「规则模式」时，Agent 显式走确定性规则实现，主链路不中断、可离线演示。
-
-环境变量为**兜底默认值**（未配置设置中心时使用），默认指向本地 Ollama 兼容端点：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `LLM_ENABLED` | `true` | 是否启用真实 LLM；设为 `false` 则全部退回规则实现。 |
-| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点兜底默认值（指向 Ollama 的 `/v1`）；设置中心配置优先。 |
-| `LLM_MODEL` | `qwen2.5:latest` | 兜底默认模型名。 |
-| `LLM_API_KEY` | `ollama` | Ollama 无需真实 key，填任意值；云端厂家请在设置中心填写真实 Key。 |
-| `LLM_TEMPERATURE` | `0.3` | 生成温度。 |
-| `LLM_TIMEOUT_MS` | `120000` | 单次调用超时（毫秒）。 |
-
-- 结构化输出直接复用 Agent 的 Pydantic Schema，Java 落库契约不变。
-- 切换厂家：在设置中心 LLM 卡片选择厂家与模型即可，代码无需改动（所有厂家统一走 OpenAI 兼容客户端）。
-
-### 6. 分类知识库 RAG（可选，横向赋能）
-
-商品规划（Product Planning）与图片创意（Image Creative）两个 Agent 会检索「分类知识库」并把命中内容注入 prompt，使产出引用平台规则、违禁词与 SEO 建议。知识库为本地向量检索（可配置 embedding 端点 + 内存 Chroma，兜底默认指向本地 Ollama 兼容 `/v1`），**不改 Java/Postgres，Python 仍不持库、可独立运行**。
-
-知识以 Markdown 沉淀，一个类目一个文件：
-
-```
-python-agent-service/knowledge/
-├── Home.md        # 类目名取文件名
-├── Beauty.md
-└── Apparel.md
-```
-
-每个文件按 `#`/`##` 组织「平台规则 / 违禁词 / SEO 建议」即可，例如：
-
-```markdown
-# Home 运营知识库
-## 平台规则
-### 淘宝
-- 标题核心词前置
-## 违禁词
-- 绝对化用语：最、第一、国家级
-## SEO 建议
-- 核心词：保温杯、便携水杯
-```
-
-启用步骤（需一个 embedding 端点，兜底默认指向本地 Ollama 兼容 `/v1`）：
-
-```bash
-ollama pull nomic-embed-text   # 本地 embedding 模型（也可换任意 OpenAI 兼容 embeddings 端点）
-```
-
-Python 服务通过环境变量控制（默认值即开启，关闭后行为与改造前完全一致）：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `RAG_ENABLED` | `true` | 关闭后不检索知识库，Agent 行为与改造前一致（容器化部署默认 `false`）。 |
-| `RAG_KNOWLEDGE_DIR` | `knowledge` | 知识库目录（相对 `python-agent-service/`，或绝对路径）。 |
-| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | embedding 模型名（默认指向本地 Ollama 模型，可换任意 OpenAI 兼容 embeddings）。 |
-| `RAG_EMBEDDING_BASE_URL` | `http://localhost:11434/v1` | embeddings 端点兜底默认值，复用 LLM 的 Ollama `/v1`；设置中心配置优先。 |
-| `RAG_TOP_K` | `3` | 每个类目召回的块数。 |
-| `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `500` / `50` | 切块参数（可选）。 |
-
-- 检索结果会写入 `PRODUCT_PLANNING_AGENT` 的运行轨迹 `input_json.retrieved_knowledge`，前端「运行详情」可直接查看注入了哪些知识。
-- 优雅降级：RAG 关闭 / 嵌入模型不可用 / 检索异常时返回空知识串，主链路不中断。
-
-### 7. 图片视觉审核（可选，全本地）
-
-Image Creative Agent 在生成图片创意方案后，会用**已配置的 LLM**（设置中心所选厂家）对方案做一次独立「视觉合规/质量审核」，产出结构化结果：
-
-```json
-{
-  "overall_score": 92,
-  "risk_level": "低风险",
-  "issues": [],
-  "suggestions": ["可直接使用"],
-  "reviewer": "llm"
-}
-```
-
-- 审核复用已配置的 LLM（与生成同一套设置中心配置），**不接外部图片生成 API、不引 key、无费用**。
-- 审核结果随 `ImagePlan.image_review_result` 一并返回，并写入 `IMAGE_CREATIVE_AGENT` 的运行轨迹 `output_json`，前端「运行详情」图片创意块与 trace 自动可见。
-- 关闭 `IMAGE_REVIEW_ENABLED=false` 后不再产出审核字段，行为与改造前一致。
-- 优雅降级：审核 LLM 调用失败时不丢弃已生成的创意方案，审核结果置为 `null`；LLM 关闭（规则路径）时走确定性启发式审核（`reviewer="rule"`）。
-
-Python 服务通过环境变量控制：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `IMAGE_REVIEW_ENABLED` | `true` | 关闭后不产出图片审核结果。 |
-
-- LLM 调用失败（如端点不可达、Key 缺失、模型不存在）：Supervisor 先重试 1 次，仍失败则**直接报错**（422 中文可读），由前端弹窗提示，**不再静默降级到规则实现**；失败的 Agent 在 `agent_runs` 中标记为 `FAILED` 并写入 `errors`。
-- 切换其他 OpenAI 兼容提供方（如 DeepSeek）：把 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 改掉即可，代码无需改动。
-
-### 6. 前端（Node）
-
-前端是独立 React + Vite SPA（`frontend/` 目录），需 Node.js 18+（本机实测 v24）。开发期由 Vite 把 `/api` 代理到 Java，无需改 Java CORS。
-
-```bash
-cd frontend
-npm install
-npm run dev   # http://localhost:5173
-```
-
----
-
-## 启动四个服务
-
-1. **PostgreSQL**：`docker compose up -d postgres`
-2. **Java**：在 `java-service` 目录运行 `mvn spring-boot:run`（本文档采用；或用 Maven Wrapper）
-3. **Python**：`uv run fastapi dev app/main.py`（`python-agent-service` 目录）
-4. **前端**：`cd frontend && npm install && npm run dev`（`http://localhost:5173`）
-
-前端通过 Vite 代理访问 Java（`:8080`），因此启动顺序：先起 PostgreSQL/Java/Python，再起前端。
-
-健康检查：
-- Java：`GET http://localhost:8080/health`
-- Python：`GET http://localhost:8000/health`
-- Java Swagger UI：`http://localhost:8080/docs`
-
----
-
-## 一键启动（Docker Compose 全栈）
-
-无需本机安装 JDK/Maven/Python/Node，一条命令起全栈（PostgreSQL + Java + Python + 前端，nginx 反代统一入口）：
-
-```bash
+cp .env.example .env
 docker compose up -d --build
 ```
 
-启动后浏览器打开 **http://localhost**（nginx 已托管前端并把 `/api` 反代到 Java，无需改 Java CORS）。
-各服务健康检查：
+启动后访问：
 
-- Java：`GET http://localhost/health`（经 nginx）或 `http://localhost:8080/health`
-- Python：`GET http://localhost:8000/health`
-- 前端：`GET http://localhost/`
+- 前端：<http://localhost>
+- Java 健康检查：<http://localhost/health>
+- Python 健康检查：<http://localhost:8000/health>
 
-默认 **规则模式**（`LLM_ENABLED=false` + `RAG_ENABLED=false`），完全离线可演示。已内置示例数据（商品/库存/订单 + 一条运营计划及 trace），打开即可浏览与「确认/驳回」。
+不要把真实 API Key、数据库密码或 JWT 密钥提交到 Git。首次部署后请由系统管理员创建和维护账号。
 
-> 接入真实 LLM：在运行后打开前端「设置」页，于 LLM 卡片选择厂家与模型（通义千问 / DeepSeek / 本地 Ollama 等）并填写 Key（Ollama 本地免 Key），保存即生效；也可在 `docker-compose.yml` 或 `.env` 中调整 `LLM_ENABLED` / `RAG_ENABLED`。镜像本身不含模型权重，RAG 需本地 `ollama pull nomic-embed-text` 或任意 OpenAI 兼容 embeddings 端点。
-
-### 手动四服务启动（本地开发）
-
-若不想用容器，也可按「运行前提」逐服务本地起（PostgreSQL 用 `docker compose up -d postgres`，其余见各小节）。前端开发期由 Vite 把 `/api` 代理到 Java（`:8080`）。
-
----
-
-## 地址补全复核（订单监控 Agent 审核落点）
-
-订单详情页点「确认地址已补全」**不再是盲目信任操作**：`OrderController.completeAddress` 先调用 Python 侧 **`OrderMonitorAgent`**（线2 订单监控 Agent）向订单来源复核地址是否真已补全，再决定后续流程。监控逻辑完全在 Python Agent，Java 只负责编排与落库。
-
-- 复核**未通过** → Python 返回 `verified=false`，Java 直接返回 `409` + 可读原因，前端弹窗提示，**不翻转 `addressComplete`、不改订单状态**（即"还是没填就弹提示"）。
-- 复核**通过** → 置 `addressComplete=true`，调 Python 重算履约结论，并**同时流转订单主状态 `status`**（之前创建后永不变）：可发货→`READY_TO_SHIP`，仍缺库存→`INSUFFICIENT_STOCK`，其余→`NEEDS_REVIEW`。
-
-### 两个监控 Agent（线2）
-
-| Agent | 类型 | 职责 |
-| --- | --- | --- |
-| `InventoryMonitorAgent` | 预测型 | 基于真实日销 + LLM 未来事件，估算可售天数并预警（< 5 天 WARN） |
-| `OrderMonitorAgent` | 核验型 | 订单维度复核（当前为地址补全复核），向订单来源确认状态是否真已达成 |
-
-两者各管一摊，均属线2 监控，入口分别在 `line2.py` 的 `/line2/inventory-warnings` 与 `/order-monitor/verify`。
-
-### 定时轮询自动补全（模式无关）
-
-除手动「确认地址已补全」外，系统还有**定时轮询**自动回写平台地址真相（`OrderAddressSyncScheduler`，默认每 60s 一轮），免去运营逐单手动点：
-
-- 每轮取「待分析 + 地址未补全」的订单，逐单调 `POST /agent/ecommerce/order-monitor/address-status`（走 `PlatformAdapter.get_address_complete`）；平台确认已补全则复用 `OrderCompletionService.markAddressComplete` 流转状态。
-- **模式无关、接官方 API 即直接可用**：未配置真实凭证时，适配器返回与平台同构的**模拟真相**（约 60% 判定为已补全，结果稳定），因此「模拟器」与「官方 API」走完全相同的落库路径；在设置中心填好平台凭证后自动改查真实开放 API，轮询逻辑零改动。
-- 查询失败（Python 不可用 / 平台未对接）**失败闭合**：跳过该单、不改状态、记日志，不影响本轮其余订单。
-- 开关与节奏见配置 `ORDER_ADDRESS_SYNC_ENABLED` / `ORDER_ADDRESS_SYNC_DELAY_MS` / `ORDER_ADDRESS_SYNC_BATCH`。
-
-### 手动「确认地址已补全」与定时轮询共用同一套逻辑
-
-手动点「确认地址已补全」（`POST /api/orders/{id}/complete-address`）与上面的定时轮询，**最终都经 `PlatformAdapter.get_address_complete` 向订单来源复核地址是否真已补全**——这条接缝是**模式无关**的：
-
-- 未配置真实平台凭证（模拟器模式）→ 适配器返回与平台**同构**的模拟真相（`_simulated_address_complete`：稳定哈希、约 60% 判定已补全），充当官方 API 的替身；
-- 在设置中心填好平台凭证 → 自动改查真实开放 API（`_address_complete_real`），**代码零改动**。
-
-这正是本项目「用模拟器模拟官方 API、接上官方 API 即直接用」的设计目标：**不把系统切成 real / 模拟两套分支**，而是让同一套落库路径在"模拟真相"与"真实平台"之间无缝切换。手动点「确认地址已补全」与定时轮询现在**已彻底合并到这一条模式无关接缝**（随机演练分支已移除，见文末「已知约束与下一步」）。
-
-### 付款闭环（与地址补全完全对称）
-
-「未付款」与「地址不全」共用同一套闭环逻辑，避免两类问题出现逻辑分裂：
-
-- **手动「确认已付款」**：`POST /api/orders/{id}/mark-paid` 先调 `OrderMonitorAgent.verify_payment`（`POST /agent/ecommerce/order-monitor/verify-payment`）向订单来源复核买家是否已付款；未通过→`409` + 可读原因（前端弹窗，不改状态），通过→置 `paid=true` 并复用 `OrderCompletionService.markPaid` 流转状态（人工审核优先保持 `NEEDS_REVIEW`；地址仍不全则保持 `PENDING_ANALYSIS`/`ADDRESS_INCOMPLETE`；否则重算履约）。
-- **定时轮询自动回款**（`OrderAddressSyncScheduler.paymentCheck`，与 `healCheck` 对称）：每轮取「待分析 + 未付款」订单，逐单调 `POST /agent/ecommerce/order-monitor/payment-status`（走 `PlatformAdapter.get_paid`）；平台确认已付款则自动 `markPaid`。同样**模式无关**：未配凭证→稳定模拟真相（约 60% 判定已付款），配了→真实开放 API。
-- **超时升级统一覆盖两类**：`escalateOverdue` 现查询「待分析 +（地址未补全 或 未付款）+ 超 `sla-days` 天」的订单统一升级为 `NEEDS_REVIEW`（保留 `pendingReason` 区分来源），纯未付款单不再卡死在待分析中。
-
-`pendingReason` 三态（`UNPAID` / `ADDRESS_INCOMPLETE` / `UNPAID_AND_ADDRESS`）由 `Order.computePendingReason` 在待分析态推导，前端据此路由「地址异常 / 待付款 / 两者都有」卡片与对应话术。地址与付款两套复核经 `get_address_complete` / `get_paid` 同一个模式无关接缝，逻辑完全对齐。
-
----
-
-## 订单数据来源（模拟 ↔ 真实）
-
-平台订单是整条履约链路的源头。为让系统在「没接平台」时也能完整演练、又能在「接上平台」后零改动切换，我们把"订单从哪来"收敛成一个 `OrderSource` 接口：
-
-```java
-public interface OrderSource {
-    String name();                                // mock / real，会写进 orders.source
-    List<PulledOrder> pull(OrderPullCommand cmd); // 只产出「事实」，不决定状态
-}
-```
-
-两种来源**只产出事实**（是否已付款 `paid`、地址是否完整 `addressComplete`、平台是否标记需复核 `manualReviewRequired`、收件人/金额/物流等结构化字段），业务状态由 Java 侧 `SimulationService.deriveStatus` 按**同一套规则**统一推导：
-
-| 事实组合 | 推导状态 |
-| --- | --- |
-| 库存不足（运行库存 < 下单量） | `INSUFFICIENT_STOCK` |
-| `manualReviewRequired` | `NEEDS_REVIEW` |
-| `!paid \|\| !addressComplete` | `PENDING_ANALYSIS` |
-| 其余（已付款 + 地址完整 + 无需复核） | `READY_TO_SHIP` |
-
-由此 mock 与 real 两条路径落到 `orders` 里的行**完全同构**——下游 Agent、库存联动、日销聚合、前端页面都不感知数据来源，切换来源无需改动任何下游代码。
-
-### 模拟来源（默认）
-
-`MockOrderSource`（`DATA_SOURCE=mock`）本地造数，按同样的「约 70% 可发 / 15% 待分析 / 15% 需复核」分布生成订单，并带平台单号、收件人（抖音 / 小红书按平台加密）、金额、物流等真实订单会有的字段。造数**不判断库存、不决定状态**——库存不足由运行库存实时推导，避免"明明有货却显示库存不足"的误导。
-
-### 真实来源（接平台）
-
-`RealOrderSource`（`DATA_SOURCE=real`）本身不持有任何平台密钥：Java 只把"要哪些已确认计划、最近几天"发给 Python（`POST /agent/ecommerce/platform/pull-orders`），**平台凭证与协议翻译全部在 Python 侧**（见 `python-agent-service/app/platform/`，`PlatformAdapter` 抽象）。Python 返回平台中立的 `PlatformOrder` 列表，Java 在同一事务内落库。
-
-**失败闭合**：某平台未对接 / 凭证缺失时，Python 把中文原因放进 `warnings`；若一个平台都没拉成，Java 直接报中文错误给用户（**不静默回退到模拟数据**），前端弹窗提示"该去哪补什么"。
-
-> ⚠️ **官方平台请求映射仍待接入**：统一适配器契约、发布/发货幂等任务、失败退避重试、外部成功快照和人工对账已经完成；接入时只实现各平台请求/响应映射，Java 状态机和前端无需重写。真实模式缺凭证或调用失败时直接报错，不回退模拟数据。
-
-### 幂等去重
-
-`orders` 表对 `(platform, platform_order_id)` 建唯一索引。真实来源重复同步时，已存在的平台单号直接跳过（不重复落库）；模拟来源每批单号带时间戳 + 自增序号，天然不冲突。
-
-### 前端切换
-
-前端「模拟器」页在加载时调 `GET /api/simulation/data-source`：返回 `source=mock` 时展示"平台模拟"（本地造数演示）；返回 `source=real` 且带已对接平台列表时，切换为"平台订单同步"界面，列出已对接平台并拉取最近订单。
-
----
-
-## 链路截图指南
-
-为作品集补充截图时，建议在本机跑起全栈后截取以下画面（演示数据已内置，无需先触发编排）：
-
-1. **计划列表**：前端「运营计划」页，展示 seed 的示例计划（状态、需人工审核）。
-2. **计划详情**：点开计划，展示四类产出（商品规划 / 图片创意 / 库存采购 / 订单履约）与每个 Agent 的执行 trace（输入 / 输出 / 错误）。
-3. **库存预测 / 物流异常**：在计划详情的「库存采购」「订单履约」块中可见 `daily_demand` / `days_to_stockout` / `logistics_risk_level` / `after_sale_suggested` 等增强字段。
-4. **确认 / 驳回闭环**：在计划详情点「确认计划」→ 确认状态变为 `CONFIRMED`；点「驳回计划」→ 变为 `REJECTED`（按钮随之禁用）。可截前后对比。
-5. **Swagger / 接口**：`http://localhost:8080/docs` 展示 Java REST API；`/api/operation-plans/{id}/confirm`、`/reject` 可在文档内直接试。
-
----
-
-## 接口清单
-
-### Java 业务 API（base: `http://localhost:8080`）
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| POST | `/api/products` | 创建商品 |
-| GET | `/api/products` | 商品列表 |
-| GET | `/api/products/{id}` | 商品详情 |
-| PUT | `/api/products/{id}` | 更新商品 |
-| DELETE | `/api/products/{id}` | 删除商品 |
-| POST | `/api/inventories` | 创建库存 |
-| GET | `/api/inventories` | 库存列表 |
-| GET | `/api/inventories/{id}` | 库存详情 |
-| GET | `/api/inventories/by-product/{productId}` | 按商品查库存 |
-| PUT | `/api/inventories/{id}` | 更新库存 |
-| DELETE | `/api/inventories/{id}` | 删除库存 |
-| POST | `/api/orders` | 创建订单 |
-| GET | `/api/orders` | 订单列表 |
-| GET | `/api/orders/{id}` | 订单详情 |
-| GET | `/api/orders/by-product/{productId}` | 按商品查订单 |
-| PUT | `/api/orders/{id}` | 更新订单 |
-| DELETE | `/api/orders/{id}` | 删除订单 |
-| POST | `/api/operation-plans` | 创建运营计划（Python 写回用） |
-| GET | `/api/operation-plans` | 计划列表 |
-| GET | `/api/operation-plans/{id}` | 计划详情 |
-| GET | `/api/operation-plans/by-trace/{traceId}` | 按 trace 查计划 |
-| PUT | `/api/operation-plans/{id}` | 更新计划 |
-| DELETE | `/api/operation-plans/{id}` | 删除计划 |
-| POST | `/api/operation-plans/{id}/confirm` | 人工确认计划（置 `confirmation_status=CONFIRMED`） |
-| POST | `/api/operation-plans/{id}/reject` | 人工驳回计划（置 `confirmation_status=REJECTED`） |
-| POST | `/api/simulation/pull-orders` | 按已确认计划拉取平台订单（mock 本地造数 / real 调 Python 拉真实平台单） |
-| GET | `/api/simulation/data-source` | 当前订单数据来源（`{source: mock\|real, platforms: [...]}`），前端据此切换模拟/同步界面 |
-| POST | `/api/agent-runs` | 创建 Agent 执行记录（Python 写回用） |
-| GET | `/api/agent-runs` | 记录列表 |
-| GET | `/api/agent-runs/{id}` | 记录详情 |
-| GET | `/api/agent-runs/by-operation-plan/{operationPlanId}` | 按计划查执行记录 |
-
-### 编排入口（主链路触发点）
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| POST | `/api/orchestration/generate` | 加载商品/库存/订单 → 调 Python 生成运营计划 |
-
-请求体：`{ "productId": <long>, "orderId": <long>, "triggerType": "MANUAL" }`
-
-### Python 运营计划 API（base: `http://localhost:8000`）
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| POST | `/agent/ecommerce/operation-plan` | 接收 product/inventory/order 上下文，返回结构化 `OperationPlanResult`，并副作用式写回 Java |
-| POST | `/agent/ecommerce/platform/pull-orders` | 按平台分组调 `PlatformAdapter` 拉真实订单，返回平台中立 `PlatformOrder` 列表（Java 落库，Python 不持库） |
-| GET | `/agent/ecommerce/platform/status` | 各平台对接就绪情况（`ready` 列表：凭证齐全、可正常拉单的平台） |
-| POST | `/agent/ecommerce/order-monitor/address-status` | 查询某平台订单地址完整标记（**模式无关**，供定时轮询复用）：已配置凭证→查官方 API，未配置→返回模拟真相 |
-| POST | `/agent/ecommerce/order-monitor/verify-payment` | 订单付款复核（对称 verify）：向订单来源确认买家是否已付款，未通过→`verified=false` + 可读原因 |
-| POST | `/agent/ecommerce/order-monitor/payment-status` | 查询某平台订单付款标记（**模式无关**，供定时轮询复用）：已配置凭证→查官方 API，未配置→返回模拟真相 |
-
-请求体（`OperationPlanRequest`）：`product` / `inventory` / `order` 三个上下文对象 + `trigger_type`。
-
-`POST /agent/ecommerce/platform/pull-orders` 请求体：`plans`（每项 `platform` / `plan_id` / `product_id` / `product_name` / `platform_item_id`）+ `since_days`。返回：`orders` / `platforms` / `warnings`。
-
----
-
-## 端到端小闭环验证
-
-推荐用脚本一次性跑通（自动造数 → 触发 → 校验落库）：
+### 本地开发启动
 
 ```bash
-# 三个服务都起来后
-python scripts/demo_e2e.py
+# 1. PostgreSQL
+docker compose up -d postgres
+
+# 2. Java
+cd java-service
+mvn spring-boot:run
+
+# 3. Python
+cd ../python-agent-service
+uv sync
+uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000
+
+# 4. 前端
+cd ../frontend
+npm install
+npm run dev
 ```
 
-脚本会：创建 1 个商品 + 1 条库存 + 1 个订单 → 调 `POST /api/orchestration/generate` → 校验 `operation_plans` 写入 1 行、`agent_runs` 写入 5 行（5 个 Agent 各一条，均 `status=SUCCESS`）。
+开发地址：<http://localhost:5173>
 
-造数后，打开前端 `http://localhost:5173` → 「运营计划」查看计划与每个 Agent 的 trace（输入/输出/错误），即可人工阅读审核。
+## 主要目录
 
-也可手动复现（见下方示例请求）。
+```text
+.
+├── frontend/                 # React + Vite 前端
+├── java-service/             # Spring Boot 业务服务
+├── python-agent-service/     # FastAPI Agent 服务
+├── scripts/                  # 端到端验证和辅助脚本
+├── docs/                     # 系统手册、计划和生产检查清单
+├── docker-compose.yml        # PostgreSQL、Java、Python、前端
+├── .env.example              # 环境变量示例，不含真实密钥
+└── .gitignore                # 本地数据、日志、构建产物和密钥排除规则
+```
 
----
-
-## 手动示例请求
-
-> 注意：在 Windows PowerShell 里用 `curl.exe` 内联中文 JSON 易踩坑（反斜杠转义 + GBK/UTF-8 乱码导致 400）。最稳的方式是把 JSON 写文件后用 `curl.exe -d "@file.json"` 发送，或直接使用 `scripts/demo_e2e.py`。
+## 验证
 
 ```bash
-# 1) 创建商品（status 枚举：DRAFT / ANALYZED / NEEDS_REVIEW）
-curl.exe -s -X POST http://localhost:8080/api/products \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Wireless Earbuds","category":"Audio","description":"Budget ANC earbuds","costPrice":39.0,"salePrice":99.0,"targetAudience":"students","usageScenario":"commute","status":"ANALYZED"}'
-
-# 2) 创建库存（productId 用上一步返回的 id；status 枚举：ENOUGH / LOW / RISK）
-curl.exe -s -X POST http://localhost:8080/api/inventories \
-  -H "Content-Type: application/json" \
-  -d '{"productId":1,"currentStock":120,"reservedStock":10,"safeStockThreshold":50,"purchaseCycleDays":14,"salesLast7Days":40,"inventoryStatus":"ENOUGH"}'
-
-# 3) 创建订单（status 枚举：PENDING_ANALYSIS / READY_TO_SHIP / INSUFFICIENT_STOCK / NEEDS_REVIEW）
-curl.exe -s -X POST http://localhost:8080/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{"productId":1,"quantity":2,"status":"PENDING_ANALYSIS","addressComplete":true,"paid":true,"manualReviewRequired":false,"fulfillmentSuggestionStatus":"PENDING_ANALYSIS"}'
-
-# 4) 触发编排（Java 调 Python）
-curl.exe -s -X POST http://localhost:8080/api/orchestration/generate \
-  -H "Content-Type: application/json" \
-  -d '{"productId":1,"orderId":1,"triggerType":"MANUAL"}'
-
-# 5) 查询结果（Python 已写回 Java）
-curl.exe -s "http://localhost:8080/api/operation-plans" | head -c 800
-curl.exe -s "http://localhost:8080/api/agent-runs/by-operation-plan/1"
+cd frontend && npm run build
+cd ../java-service && mvn test
+cd ../python-agent-service && uv run pytest
 ```
 
----
+更多当前状态和详细业务流程见：[系统现状与用户使用手册](docs/SYSTEM_STATUS_AND_USER_GUIDE.md)。
 
-## 配置项
+## License
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/ecommerce_agent` | Java 数据源 |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` | `ecommerce` / `ecommerce_password` | 数据库账号 |
-| `python.agent.base-url` | `http://localhost:8000` | Java 调 Python 地址（可用 `PYTHON_AGENT_BASE_URL` 覆盖） |
-| `python.agent.connect-timeout-ms` | `10000` | 连接超时 |
-| `python.agent.read-timeout-ms` | `120000` | 读取超时（留足多 Agent 串行 LLM 生成时间） |
-| `JAVA_API_BASE_URL` | `http://localhost:8080` | Python 调 Java 地址（环境变量覆盖） |
-| `DATA_SOURCE` | `mock` | 订单数据来源：`mock`=本地造数（默认，演示用）；`real`=经 Python 调平台开放 API 拉真实订单（需先在设置中心填平台凭证） |
-| `ORDER_ADDRESS_SYNC_ENABLED` | `true` | 定时轮询自动补全地址开关（见上方「定时轮询自动补全」）；关则只靠手动「确认地址已补全」 |
-| `ORDER_ADDRESS_SYNC_DELAY_MS` | `60000` | 轮询间隔（毫秒），默认 60s 一轮 |
-| `ORDER_ADDRESS_SYNC_BATCH` | `50` | 每轮最多处理的「待分析 + 地址未补全」订单数 |
-| `LLM_ENABLED` | `true` | 是否启用真实 LLM（见上方「LLM 配置」） |
-| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点（Ollama） |
-| `LLM_MODEL` | `qwen2.5:latest` | LLM 模型名 |
-| `LLM_API_KEY` | `ollama` | LLM API Key |
-| `LLM_TEMPERATURE` | `0.3` | 生成温度 |
-| `LLM_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时（毫秒） |
-| `RAG_ENABLED` | `true` | 是否启用分类知识库 RAG（见上方「分类知识库 RAG」） |
-| `RAG_KNOWLEDGE_DIR` | `knowledge` | 知识库目录 |
-| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | 本地 embedding 模型 |
-| `RAG_EMBEDDING_BASE_URL` | `http://localhost:11434/v1` | embeddings 端点（默认复用 LLM） |
-| `RAG_TOP_K` | `3` | 每类目召回块数 |
-| `IMAGE_REVIEW_ENABLED` | `true` | 是否对图片创意方案做已配置 LLM 视觉审核（见上方「图片视觉审核」） |
-
----
-
-## 已知约束与下一步
-
-- 各表 `status` 字段有 CHECK 枚举约束，写数据时需使用合法枚举值（见上文示例）。
-- 默认 Agent 为规则实现（显式选择「规则」或部署级 `LLM_ENABLED=false`）；在设置中心选好厂家并填 Key（或本地 Ollama 就绪）后，4 个业务 Agent 走真实 LLM 生成，调用失败直接报错（不再静默降级到规则）。`InventoryMonitorAgent` 为可选 LLM 的预测；地址补全复核（线2）走 `PlatformAdapter.get_address_complete`，**模式无关**（模拟器 = 官方 API 替身，填凭证即查真实 API）。
-- **已完成**：`OrderMonitorAgent` 的随机演练分支（`ORDER_MONITOR_MODE=demo`）已移除，手动「确认地址已补全」与定时轮询**已合并到同一条模式无关接缝**（统一走 `PlatformAdapter.get_address_complete`，模拟器 = 官方 API 替身，填凭证即查真实 API）。设置中心不再暴露订单监控的模式/成功率配置。
-- **下一步**：单个 Agent 深度增强（真实图片生成 / 库存预测 / 物流售后）、Supervisor 动态路由与人工确认、LangGraph 动态编排。
+当前项目用于学习、研发和作品展示。正式开源前请根据实际依赖和商业计划补充 License。
